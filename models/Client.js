@@ -1,0 +1,74 @@
+import mongoose from 'mongoose';
+
+const clientSchema = new mongoose.Schema({
+  user: { 
+    type: mongoose.Schema.Types.ObjectId, 
+    ref: 'User', 
+    required: true,
+    unique: true 
+  },
+  companyName: { 
+    type: String, 
+    required: true 
+  },
+  address: {
+    street: String,
+    city: String,
+    state: String,
+    country: String,
+    postalCode: String
+  },
+  oldWebsite: {
+    type: String,
+    match: [/^https?:\/\/(www\.)?[-a-zA-Z0-9@:%._\+~#=]{1,256}\.[a-zA-Z0-9()]{1,6}\b([-a-zA-Z0-9()@:%_\+.~#?&//=]*)$/, 'Please use a valid URL with HTTP or HTTPS']
+  },
+  taxId: String,
+  notes: String,
+  isActive: { 
+    type: Boolean, 
+    default: true 
+  },
+  // Reference to the services they've purchased
+  services: [{
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Service'
+  }],
+  // Reference to their current plan
+  currentPlan: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Plan'
+  },
+ 
+}, { 
+  timestamps: true,
+  toJSON: { virtuals: true },
+  toObject: { virtuals: true }
+});
+
+// Indexes for better query performance
+clientSchema.index({ companyName: 'text' });
+
+// Virtual for client's full address
+clientSchema.virtual('fullAddress').get(function() {
+  return `${this.address?.street || ''}, ${this.address?.city || ''}, ${this.address?.state || ''} ${this.address?.postalCode || ''}, ${this.address?.country || ''}`.trim();
+});
+
+// Static method to find active clients
+clientSchema.statics.findActive = function() {
+  return this.find({ isActive: true });
+};
+
+// Instance method to get client summary
+clientSchema.methods.getSummary = function() {
+  return {
+    id: this._id,
+    companyName: this.companyName,
+    email: this.user?.email,
+    status: this.isActive ? 'Active' : 'Inactive',
+    servicesCount: this.services?.length || 0
+  };
+};
+
+const Client = mongoose.model('Client', clientSchema);
+
+export default Client;

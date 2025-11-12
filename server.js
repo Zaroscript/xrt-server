@@ -1,0 +1,194 @@
+import express from "express";
+import dotenv from "dotenv";
+import cors from "cors";
+import cookieParser from "cookie-parser";
+import rateLimit from "express-rate-limit";
+import mongoSanitize from "express-mongo-sanitize";
+import hpp from "hpp";
+import connectDB from "./config/database.js";
+import authRoutes from "./routes/authRoutes.js";
+import dashboardRoutes from "./routes/dashboardRoutes.js";
+import adminRoutes from "./routes/adminRoutes.js";
+import clientRoutes from "./routes/clientRoutes.js";
+import serviceRoutes from "./routes/serviceRoutes.js";
+import planRoutes from "./routes/planRoutes.js";
+import subscriberRoutes from "./routes/subscriberRoutes.js";
+import invoiceRoutes from "./routes/invoiceRoutes.js";
+import errorHandler from "./middleware/errorHandler.js";
+import User from "./models/User.js";
+
+// Load environment variables
+dotenv.config();
+
+// Initialize Express app
+const app = express();
+
+// ========================
+// MIDDLEWARE
+// ========================
+
+// Trust first proxy (if behind a proxy like nginx, heroku, etc.)
+app.set('trust proxy', 1);
+
+// Security headers - must come before CORS
+app.use((req, res, next) => {
+  // Don't set these headers for OPTIONS requests (preflight)
+  if (req.method !== 'OPTIONS') {
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    res.setHeader("X-Frame-Options", "DENY");
+    res.setHeader("X-XSS-Protection", "1; mode=block");
+    res.setHeader("Strict-Transport-Security", "max-age=31536000; includeSubDomains; preload");
+    res.setHeader("Referrer-Policy", "same-origin");
+    res.setHeader("Permissions-Policy", "geolocation=(), microphone=(), camera=()");
+  }
+  next();
+});
+
+// Enable CORS with specific origins and credentials
+const allowedOrigins = [
+  'http://localhost:8080',  // Your frontend URL
+  'http://localhost:3000',
+  'http://localhost:3001',
+  'http://127.0.0.1:8080',  // Sometimes browsers use this
+  'http://127.0.0.1:3000',
+  'http://localhost:5173',  // Vite default port
+  'http://127.0.0.1:5173',
+  process.env.DASHBOARD_FRONTEND_URL,
+  process.env.USER_FRONTEND_URL
+].filter(Boolean);
+
+// CORS configuration
+const corsOptions = {
+  origin: function (origin, callback) {
+    // In development, allow all origins
+    if (process.env.NODE_ENV === 'development') {
+      return callback(null, true);
+    }
+    
+    // In production, only allow specific origins
+    if (allowedOrigins.indexOf(origin) !== -1 || !origin) {
+      return callback(null, true);
+    }
+    
+    const msg = `The CORS policy for this site does not allow access from ${origin}`;
+    return callback(new Error(msg), false);
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept', 'Origin'],
+  exposedHeaders: ['Set-Cookie', 'Authorization', 'Content-Range', 'X-Content-Range'],
+  maxAge: 86400, // 24 hours
+  preflightContinue: false,
+  optionsSuccessStatus: 204
+};
+
+// Handle preflight requests
+app.options('*', cors(corsOptions));
+
+// Apply CORS to all routes
+app.use(cors(corsOptions));
+
+// Body parser middleware with increased limit
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+app.use(cookieParser());
+
+// Data sanitization against NoSQL query injection
+app.use(mongoSanitize());
+
+// Prevent parameter pollution
+app.use(
+  hpp({
+    whitelist: [
+      // Add any parameters you want to allow in query string
+    ],
+  })
+);
+
+// Rate limiting
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 5, // Limit each IP to 5 login requests per windowMs
+  message: { status: 'error', message: 'Too many login attempts, please try again later.' },
+});
+
+// Apply rate limiting to login route
+app.use("/api/v1/auth/login", loginLimiter);
+
+// ========================
+// ROUTES
+// ========================
+// Root API route
+app.get("/api/v1", (req, res) => {
+  res.status(200).json({
+    status: 'success',
+    message: 'XRT API is running',
+    endpoints: {
+      auth: '/api/v1/auth',
+      admin: '/api/v1/admin',
+      services: '/api/v1/services',
+      plans: '/api/v1/plans',
+      subscribers: '/api/v1/subscribers',
+      invoices: '/api/v1/invoices'
+    },
+    documentation: 'Coming soon...'
+  });
+});
+
+// API Routes
+app.use("/api/v1/auth", authRoutes);
+app.use("/api/v1/dashboard", dashboardRoutes);
+app.use("/api/v1/admin", adminRoutes);
+app.use("/api/v1/clients", clientRoutes);
+app.use("/api/v1/services", serviceRoutes);
+app.use("/api/v1/plans", planRoutes);
+app.use("/api/v1/subscribers", subscriberRoutes);
+app.use("/api/v1/invoices", invoiceRoutes);
+
+// ========================
+// ERROR HANDLING
+// ========================
+app.use(errorHandler);
+
+// ========================
+// START SERVER
+// ========================
+const PORT = process.env.PORT || 5000;
+
+const start = async () => {
+  try {
+    await connectDB();
+
+    // Create Super Admin if not exists
+    const superAdmin = await User.findOne({
+      email: process.env.DEFAULT_ADMIN_EMAIL,
+    });
+    
+    if (!superAdmin && process.env.DEFAULT_ADMIN_EMAIL && process.env.DEFAULT_ADMIN_PASS) {
+      // Extract first name and last name from email
+      const emailPrefix = process.env.DEFAULT_ADMIN_EMAIL.split('@')[0];
+      const fName = emailPrefix.split('.')[0] || 'Admin';
+      const lName = emailPrefix.split('.').length > 1 ? emailPrefix.split('.')[1] : 'User';
+      
+      await User.create({
+        email: process.env.DEFAULT_ADMIN_EMAIL,
+        password: process.env.DEFAULT_ADMIN_PASS,
+        fName: fName.charAt(0).toUpperCase() + fName.slice(1), // Capitalize first letter
+        lName: lName.charAt(0).toUpperCase() + lName.slice(1), // Capitalize first letter
+        role: "super_admin",
+        isApproved: true,
+      });
+      console.log("✅ Super Admin created successfully");
+    }
+
+    app.listen(PORT, () => {
+      console.log(`Server running on http://localhost:${PORT}`);
+      console.log(`Admin Panel: ${process.env.FRONTEND_URL || "http://localhost:3000"}/admin`);
+    });
+  } catch (error) {
+    console.error('Failed to start server:', error);
+    process.exit(1);
+  }
+};
+
+start();
