@@ -15,11 +15,20 @@ export const getAllPlans = async (req, res, next) => {
     if (featured) query.isFeatured = featured === 'true';
     
     const plans = await Plan.find(query).sort({ price: 1 });
-    
+
+    // Include virtual fields in the response
+    const plansWithVirtuals = plans.map(plan => ({
+      ...plan.toObject(),
+      discountedPrice: plan.discountedPrice,
+      discountedMonthlyPrice: plan.discountedMonthlyPrice,
+      discountedYearlyPrice: plan.discountedYearlyPrice,
+      isDiscountActive: plan.isDiscountActive()
+    }));
+
     res.status(200).json({
       status: 'success',
-      results: plans.length,
-      data: { plans }
+      results: plansWithVirtuals.length,
+      data: { plans: plansWithVirtuals }
     });
   } catch (error) {
     next(error);
@@ -67,9 +76,32 @@ export const createPlan = async (req, res, next) => {
 // @access  Private/Admin
 export const updatePlan = async (req, res, next) => {
   try {
+    // Handle discount removal explicitly
+    const updateData = { ...req.body };
+    if (req.body.discount === undefined || req.body.discount === null) {
+      // Use $unset to remove the discount field completely
+      delete updateData.discount;
+      await Plan.findByIdAndUpdate(
+        req.params.id,
+        { $unset: { discount: 1 } },
+        { new: true, runValidators: false }
+      );
+      // Get the updated plan
+      const plan = await Plan.findById(req.params.id);
+      if (!plan) {
+        return next(new AppError('No plan found with that ID', 404));
+      }
+      return res.status(200).json({
+        status: 'success',
+        data: {
+          plan
+        }
+      });
+    }
+
     const plan = await Plan.findByIdAndUpdate(
       req.params.id,
-      req.body,
+      updateData,
       {
         new: true,
         runValidators: true
@@ -82,10 +114,12 @@ export const updatePlan = async (req, res, next) => {
     
     res.status(200).json({
       status: 'success',
-      data: { plan }
+      data: {
+        plan
+      }
     });
-  } catch (error) {
-    next(error);
+  } catch (err) {
+    next(err);
   }
 };
 
@@ -156,16 +190,24 @@ export const getFeaturedPlans = async (req, res, next) => {
 // @access  Private
 export const requestPlan = async (req, res, next) => {
   const { planId } = req.params;
+  const { message } = req.body; // Get customization message from request body
   const clientId = req.user._id;
 
   try {
     const plan = await Plan.findById(planId);
     if (!plan) return next(new AppError('Plan not found', 404));
 
-    const request = await PlanRequest.create({
+    const requestData = {
       client: clientId,
       plan: planId,
-    });
+    };
+
+    // Only add message if it exists
+    if (message) {
+      requestData.message = message;
+    }
+
+    const request = await PlanRequest.create(requestData);
 
     res.status(201).json({ status: 'success', data: { request } });
   } catch (err) {

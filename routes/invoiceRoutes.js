@@ -19,7 +19,7 @@ router.route('/')
 router.route('/:id')
   .get(protect, getInvoiceById)
   .put(protect, updateInvoice)
-  .delete(protect, restrictTo('admin', 'moderator'), deleteInvoice);
+  .delete(protect, restrictTo('super_admin', 'moderator'), deleteInvoice);
 
 // Send invoice email
 router.post('/:id/send', protect, sendInvoice);

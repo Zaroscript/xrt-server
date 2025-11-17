@@ -13,7 +13,9 @@ import clientRoutes from "./routes/clientRoutes.js";
 import serviceRoutes from "./routes/serviceRoutes.js";
 import planRoutes from "./routes/planRoutes.js";
 import subscriberRoutes from "./routes/subscriberRoutes.js";
+import subscriptionRoutes from "./routes/subscriptionRoutes.js";
 import invoiceRoutes from "./routes/invoiceRoutes.js";
+import contactRoutes from "./routes/contactRoutes.js";
 import errorHandler from "./middleware/errorHandler.js";
 import User from "./models/User.js";
 
@@ -86,7 +88,17 @@ const corsOptions = {
 app.options('*', cors(corsOptions));
 
 // Apply CORS to all routes
-app.use(cors(corsOptions));
+app.use(cors({
+  origin: [
+    'http://localhost:5000',
+    'http://localhost:8080',
+    process.env.FRONTEND_URL,
+    process.env.DASHBOARD_FRONTEND_URL,
+    process.env.USER_FRONTEND_URL
+  ].filter(Boolean),
+  credentials: true,
+  ...corsOptions
+}));
 
 // Body parser middleware with increased limit
 app.use(express.json({ limit: '10mb' }));
@@ -105,15 +117,15 @@ app.use(
   })
 );
 
-// Rate limiting
-const loginLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 5, // Limit each IP to 5 login requests per windowMs
-  message: { status: 'error', message: 'Too many login attempts, please try again later.' },
-});
+// Rate limiting (temporarily disabled for testing)
+// const loginLimiter = rateLimit({
+//   windowMs: 15 * 60 * 1000, // 15 minutes
+//   max: 5, // Limit each IP to 5 login requests per windowMs
+//   message: { status: 'error', message: 'Too many login attempts, please try again later.' },
+// });
 
-// Apply rate limiting to login route
-app.use("/api/v1/auth/login", loginLimiter);
+// Apply rate limiting to login route (temporarily disabled)
+// app.use("/api/v1/auth/login", loginLimiter);
 
 // ========================
 // ROUTES
@@ -129,6 +141,7 @@ app.get("/api/v1", (req, res) => {
       services: '/api/v1/services',
       plans: '/api/v1/plans',
       subscribers: '/api/v1/subscribers',
+      subscriptions: '/api/v1/subscriptions',
       invoices: '/api/v1/invoices'
     },
     documentation: 'Coming soon...'
@@ -143,7 +156,9 @@ app.use("/api/v1/clients", clientRoutes);
 app.use("/api/v1/services", serviceRoutes);
 app.use("/api/v1/plans", planRoutes);
 app.use("/api/v1/subscribers", subscriberRoutes);
+app.use("/api/v1/plan-management", subscriptionRoutes);
 app.use("/api/v1/invoices", invoiceRoutes);
+app.use("/api/v1/contact", contactRoutes);
 
 // ========================
 // ERROR HANDLING
@@ -154,6 +169,34 @@ app.use(errorHandler);
 // START SERVER
 // ========================
 const PORT = process.env.PORT || 5000;
+
+// Scheduled jobs
+const startScheduledJobs = () => {
+  // Import the auto-sync function
+  import('./controllers/subscriberController.js').then(({ autoSyncClientsToSubscribers }) => {
+    // Run sync every hour (3600000 ms)
+    setInterval(async () => {
+      try {
+        console.log('Running scheduled client-to-subscriber sync...');
+        await autoSyncClientsToSubscribers();
+        console.log('Scheduled sync completed successfully');
+      } catch (error) {
+        console.error('Error in scheduled sync:', error);
+      }
+    }, 3600000); // 1 hour
+
+    // Also run once on server start
+    setTimeout(async () => {
+      try {
+        console.log('Running initial client-to-subscriber sync on server start...');
+        await autoSyncClientsToSubscribers();
+        console.log('Initial sync completed successfully');
+      } catch (error) {
+        console.error('Error in initial sync:', error);
+      }
+    }, 5000); // 5 seconds after server starts
+  });
+};
 
 const start = async () => {
   try {
@@ -180,6 +223,9 @@ const start = async () => {
       });
       console.log("✅ Super Admin created successfully");
     }
+
+    // Start scheduled jobs
+    startScheduledJobs();
 
     app.listen(PORT, () => {
       console.log(`Server running on http://localhost:${PORT}`);

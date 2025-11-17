@@ -76,7 +76,7 @@ const plans = [
       "Advanced automation tools",
       "24/7 premium support"
     ],
-    maxRestaurants: 0,
+    maxRestaurants: 999, // Use 999 for unlimited (model requires min 1)
     isActive: true,
     isFeatured: false,
     discount: {

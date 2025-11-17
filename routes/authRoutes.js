@@ -2,8 +2,9 @@ import express from 'express';
 import {
   register,
   login,
-  refresh,
   logout,
+  refresh,
+  clearAllTokens,
   getMe,
   requestPasswordReset,
   resetPassword,
@@ -20,6 +21,7 @@ router.post('/register', registerValidation, validate, register);
 router.post('/login', loginValidation, validate, login);
 router.post('/refresh', refresh);
 router.post('/logout', protect, logout);
+router.post('/clear-tokens', clearAllTokens);
 router.get('/me', protect, getMe);
 router.post('/forgot-password', requestPasswordReset);
 router.patch('/reset-password/:token', resetPassword);

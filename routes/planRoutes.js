@@ -3,6 +3,9 @@ import { protect, restrictTo } from '../middleware/auth.js';
 import { 
   getAllPlans,
   getPlan,
+  createPlan,
+  updatePlan,
+  deletePlan,
   getFeaturedPlans,
   requestPlan,
   addOrUpdateDiscount,
@@ -26,7 +29,12 @@ router.use(protect);
 router.post('/request/:planId', restrictTo('client'), requestPlan);
 
 // Admin routes
-router.use(restrictTo('admin', 'superadmin'));
+router.use(restrictTo('super_admin', 'moderator'));
+
+// Plan CRUD operations
+router.post('/', createPlan);
+router.patch('/:id', updatePlan);
+router.delete('/:id', deletePlan);
 
 // Discount management
 router.post(

@@ -8,8 +8,15 @@ import {
   deleteSubscriber,
   toggleSubscriberStatus,
   getMySubscriberProfile,
-  getMySubscriptionHistory,
-  updateMyPreferences
+  getMyPlanHistory,
+  updateMyPreferences,
+  approveSubscription,
+  rejectSubscription,
+  recordPayment,
+  syncClientsToSubscribers,
+  getSubscriberStats,
+  getSubscriberGrowth,
+  getPlanDistribution,
 } from '../controllers/subscriberController.js';
 
 const router = express.Router();
@@ -19,11 +26,24 @@ router.use(protect);
 
 // Subscriber routes
 router.get('/me', getMySubscriberProfile);
-router.get('/me/history', getMySubscriptionHistory);
+router.get('/me/history', getMyPlanHistory);
 router.patch('/me/preferences', updateMyPreferences);
 
 // Admin routes
-router.use(restrictTo('admin', 'super_admin'));
+router.use(restrictTo('super_admin', 'moderator'));
+
+// Sync clients with current plans to subscribers
+router.post('/sync', syncClientsToSubscribers);
+
+// Subscriber statistics and analytics
+router.get('/stats', getSubscriberStats);
+router.get('/growth', getSubscriberGrowth);
+router.get('/plan-distribution', getPlanDistribution);
+
+// Subscription management routes - Only super admins can approve/reject
+router.post('/:subscriberId/approve', restrictTo('super_admin'), approveSubscription);
+router.post('/:subscriberId/reject', restrictTo('super_admin'), rejectSubscription);
+router.post('/:subscriberId/payments', recordPayment);
 
 router
   .route('/')

@@ -7,7 +7,8 @@ import {
   deleteClient,
   getClientByUser,
   toggleClientStatus,
-  approveClient
+  approveClient,
+  getClientActivities
 } from '../controllers/clientController.js';
 import { protect, restrictTo } from '../middleware/auth.js';
 
@@ -15,6 +16,11 @@ const router = express.Router();
 
 // Protect all routes after this middleware
 router.use(protect);
+
+// Regular authenticated user routes (no admin restriction)
+router
+  .route('/:id')
+  .get(getClient);
 
 // Admin only routes - allow super_admin and moderator
 router.use(restrictTo('super_admin', 'moderator'));
@@ -25,7 +31,6 @@ router
 
 router
   .route('/:id')
-  .get(getClient)
   .patch(updateClient)
   .delete(deleteClient);
 
@@ -39,5 +44,8 @@ router
 
 // Client access to their own data
 router.get('/user/me', getClientByUser);
+
+// Get client activities
+router.get('/:id/activities', getClientActivities);
 
 export default router;

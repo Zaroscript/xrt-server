@@ -12,12 +12,13 @@ import {
   updateService,
   deleteService,
   toggleServiceStatus,
+  getAllPlansForAdmin,
   createPlan,
   updatePlan,
   deletePlan,
   togglePlanStatus,
-  convertToSubscriber,
-  updateSubscription,
+  assignPlan,
+  updatePlan as updateUserPlan,
   getMonthlyRevenue,
   getTicketsStats,
   getUsersGrowth,
@@ -67,6 +68,7 @@ router
 router.patch('/services/:id/toggle-status', validateServiceId, toggleServiceStatus);
 
 // Plans CRUD
+router.get('/plans', getAllPlansForAdmin);
 router.post('/plans', validateCreatePlan, createPlan);
 router
   .route('/plans/:id')
@@ -74,8 +76,8 @@ router
   .delete(validatePlanId, deletePlan);
 router.patch('/plans/:id/toggle-status', validatePlanId, togglePlanStatus);
 
-// Subscription Management
-router.post('/convert-to-subscriber', convertToSubscriber);
-router.patch('/subscription/:userId', updateSubscription);
+// Plan Management
+router.post('/assign-plan', assignPlan);
+router.patch('/plan/:userId', updateUserPlan);
 
 export default router;

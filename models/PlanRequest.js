@@ -8,6 +8,7 @@ const planRequestSchema = new mongoose.Schema({
     enum: ['pending', 'approved', 'rejected'],
     default: 'pending',
   },
+  message: { type: String }, // Customization message from client
   adminNote: { type: String },
   requestedAt: { type: Date, default: Date.now },
   respondedAt: { type: Date },

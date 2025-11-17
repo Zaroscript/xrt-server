@@ -2,6 +2,7 @@ import Client from '../models/Client.js';
 import User from '../models/User.js';
 import Service from '../models/Service.js';
 import Plan from '../models/Plan.js';
+import Subscriber from '../models/Subscriber.js';
 import { AppError } from '../utils/errors.js';
 
 // @desc    Create a new client
@@ -10,19 +11,18 @@ import { AppError } from '../utils/errors.js';
 export const createClient = async (req, res, next) => {
   try {
     const { 
-      user, // Can be user ID or email
-      email, // If provided, will create/find user by email
+      user, 
+      email, 
       fName, 
       lName, 
       phone,
-      password, // Optional, will generate if not provided
+      password, 
       companyName, 
-      address, 
+      businessLocation, 
       oldWebsite, 
       taxId, 
       notes, 
-      services, 
-      currentPlan 
+      services 
     } = req.body;
 
     let userId = user;
@@ -40,6 +40,7 @@ export const createClient = async (req, res, next) => {
           fName: fName || 'Client',
           lName: lName || 'User',
           phone: phone,
+          companyName: companyName || 'Default Company', // Add required companyName
           role: 'client',
           isApproved: true, // Auto-approve clients created by admin
           isActive: true
@@ -67,12 +68,11 @@ export const createClient = async (req, res, next) => {
     const client = await Client.create({
       user: userId,
       companyName,
-      address,
+      businessLocation,
       oldWebsite,
       taxId,
       notes,
       services,
-      currentPlan,
       isActive: true
     });
 
@@ -87,6 +87,25 @@ export const createClient = async (req, res, next) => {
     });
   } catch (error) {
     console.error('Create client error:', error);
+    console.error('Error details:', {
+      message: error.message,
+      stack: error.stack,
+      name: error.name,
+      reqBody: req.body
+    });
+    
+    // Handle validation errors
+    if (error.name === 'ValidationError') {
+      const errors = Object.values(error.errors).map(err => err.message);
+      return next(new AppError(`Validation Error: ${errors.join(', ')}`, 400));
+    }
+
+    // Handle duplicate key errors
+    if (error.code === 11000) {
+      const field = Object.keys(error.keyValue)[0];
+      return next(new AppError(`${field} already exists`, 400));
+    }
+
     next(error);
   }
 };
@@ -96,29 +115,10 @@ export const createClient = async (req, res, next) => {
 // @access  Private/Admin
 export const getAllClients = async (req, res, next) => {
   try {
-    console.log('Fetching all clients...');
-    
-    // Find all clients and populate related data
-    // Use strictPopulate: false to handle missing references gracefully
-    const clients = await Client.find({})
-      .populate({
-        path: 'user',
-        select: 'email fName lName phone',
-        strictPopulate: false
-      })
-      .populate({
-        path: 'services',
-        select: 'name',
-        strictPopulate: false
-      })
-      .populate({
-        path: 'currentPlan',
-        select: 'name price',
-        strictPopulate: false
-      })
-      .lean(); // Use lean() to get plain objects for better performance
-
-    console.log(`Successfully fetched ${clients.length} clients`);
+    const clients = await Client.find()
+      .populate('user', 'email fName lName phone')
+      .populate('services', 'name description')
+      .populate('currentPlan');
 
     res.status(200).json({
       status: 'success',
@@ -128,33 +128,13 @@ export const getAllClients = async (req, res, next) => {
       }
     });
   } catch (error) {
-    console.error('Error fetching clients:', error);
-    console.error('Error details:', {
-      message: error.message,
-      name: error.name,
-      stack: error.stack
-    });
-    
-    // Return a more detailed error in development
-    if (process.env.NODE_ENV === 'development') {
-      return res.status(500).json({
-        status: 'error',
-        message: error.message,
-        error: {
-          name: error.name,
-          message: error.message,
-          stack: error.stack
-        }
-      });
-    }
-    
     next(error);
   }
 };
 
 // @desc    Get single client
 // @route   GET /api/v1/clients/:id
-// @access  Private
+// @access  Private/Admin
 export const getClient = async (req, res, next) => {
   try {
     const client = await Client.findById(req.params.id)
@@ -164,11 +144,6 @@ export const getClient = async (req, res, next) => {
 
     if (!client) {
       return next(new AppError('No client found with that ID', 404));
-    }
-
-    // Check if the user has permission to access this client
-    if (req.user.role !== 'admin' && client.user._id.toString() !== req.user.id) {
-      return next(new AppError('Not authorized to access this client', 403));
     }
 
     res.status(200).json({
@@ -187,7 +162,7 @@ export const getClient = async (req, res, next) => {
 // @access  Private/Admin
 export const updateClient = async (req, res, next) => {
   try {
-    const { companyName, address, oldWebsite, taxId, notes, services, currentPlan, isActive } = req.body;
+    const { companyName, address, oldWebsite, taxId, notes, services, currentPlan, isActive, subscription } = req.body;
     
     const client = await Client.findByIdAndUpdate(
       req.params.id,
@@ -199,13 +174,14 @@ export const updateClient = async (req, res, next) => {
         notes,
         services,
         currentPlan,
-        isActive
+        isActive,
+        subscription,
+        lastActivity: new Date().toISOString()
       },
-      {
-        new: true,
-        runValidators: true
-      }
-    );
+      { new: true, runValidators: true }
+    ).populate('user', 'email fName lName phone')
+     .populate('services', 'name description')
+     .populate('currentPlan');
 
     if (!client) {
       return next(new AppError('No client found with that ID', 404));
@@ -243,22 +219,17 @@ export const deleteClient = async (req, res, next) => {
 };
 
 // @desc    Get client by user ID
-// @route   GET /api/v1/clients/user/:userId
+// @route   GET /api/v1/clients/user/me
 // @access  Private
 export const getClientByUser = async (req, res, next) => {
   try {
-    const client = await Client.findOne({ user: req.params.userId })
+    const client = await Client.findOne({ user: req.user.id })
       .populate('user', 'email fName lName phone')
       .populate('services', 'name description')
       .populate('currentPlan');
 
     if (!client) {
-      return next(new AppError('No client found for this user', 404));
-    }
-
-    // Check if the user has permission to access this client
-    if (req.user.role !== 'admin' && client.user._id.toString() !== req.user.id) {
-      return next(new AppError('Not authorized to access this client', 403));
+      return next(new AppError('No client found for that user', 404));
     }
 
     res.status(200).json({
@@ -283,8 +254,18 @@ export const toggleClientStatus = async (req, res, next) => {
       return next(new AppError('No client found with that ID', 404));
     }
 
+    // Toggle the isActive status
     client.isActive = !client.isActive;
     await client.save();
+
+    // Also toggle the associated user if exists
+    if (client.user) {
+      await User.findByIdAndUpdate(
+        client.user._id,
+        { isActive: client.isActive },
+        { new: true }
+      );
+    }
 
     res.status(200).json({
       status: 'success',
@@ -326,6 +307,74 @@ export const approveClient = async (req, res, next) => {
       status: 'success',
       data: {
         client
+      }
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// @desc    Get client activities
+// @route   GET /api/v1/clients/:id/activities
+// @access  Private
+export const getClientActivities = async (req, res, next) => {
+  try {
+    const client = await Client.findById(req.params.id)
+      .populate('user', 'email fName lName');
+    
+    if (!client) {
+      return next(new AppError('No client found with that ID', 404));
+    }
+
+    // Generate sample activities based on client data
+    // In a real implementation, these would come from a database collection
+    const activities = [
+      {
+        id: '1',
+        type: 'login',
+        title: 'User Login',
+        description: `${client.user?.fName} ${client.user?.lName} logged into the system`,
+        timestamp: client.lastActivity || new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(),
+        status: 'success'
+      },
+      {
+        id: '2',
+        type: 'profile_update',
+        title: 'Profile Updated',
+        description: 'Client profile information was updated',
+        timestamp: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(),
+        status: 'success'
+      },
+      {
+        id: '3',
+        type: 'payment',
+        title: 'Payment Processed',
+        description: `Payment of $${client.currentPlan?.price || 0} processed successfully`,
+        timestamp: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString(),
+        status: 'success'
+      },
+      {
+        id: '4',
+        type: 'subscription_change',
+        title: 'Subscription Changed',
+        description: `Changed to ${client.currentPlan?.name || 'Basic'} plan`,
+        timestamp: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString(),
+        status: 'success'
+      },
+      {
+        id: '5',
+        type: 'support_ticket',
+        title: 'Support Ticket Created',
+        description: 'New support ticket submitted',
+        timestamp: new Date(Date.now() - 10 * 24 * 60 * 60 * 1000).toISOString(),
+        status: 'pending'
+      }
+    ];
+
+    res.status(200).json({
+      status: 'success',
+      data: {
+        activities
       }
     });
   } catch (error) {

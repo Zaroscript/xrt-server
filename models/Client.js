@@ -11,12 +11,12 @@ const clientSchema = new mongoose.Schema({
     type: String, 
     required: true 
   },
-  address: {
-    street: String,
-    city: String,
-    state: String,
-    country: String,
-    postalCode: String
+  businessLocation: {
+    address: { type: String },
+    city: { type: String },
+    state: { type: String },
+    zipCode: { type: String },
+    country: { type: String, default: 'USA' }
   },
   oldWebsite: {
     type: String,

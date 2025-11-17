@@ -144,7 +144,7 @@ const sendInvoice = async (req, res, next) => {
     }
 
     // Check if user is authorized to send this invoice
-    if (req.user.role !== 'admin' && invoice.user._id.toString() !== req.user.id) {
+    if (req.user.role !== 'super_admin' && invoice.user._id.toString() !== req.user.id) {
       throw new ForbiddenError('Not authorized to send this invoice');
     }
 

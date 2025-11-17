@@ -55,17 +55,17 @@ export const getDashboardStats = async (req, res, next) => {
       }
     });
     
-    // From active subscriptions
+    // From active plans
     activeSubscribers.forEach(subscriber => {
-      if (subscriber.subscription?.price) {
-        totalRevenue += subscriber.subscription.billingCycle === 'yearly'
-          ? subscriber.subscription.price / 12
-          : subscriber.subscription.price;
+      if (subscriber.plan?.price) {
+        totalRevenue += subscriber.plan.billingCycle === 'yearly'
+          ? subscriber.plan.price / 12
+          : subscriber.plan.price;
       }
     });
     
-    // Get active subscriptions count
-    const activeSubscriptions = activeSubscribers.length;
+    // Get active plans count
+    const activePlans = activeSubscribers.length;
     
     res.status(200).json({
       status: 'success',
@@ -75,7 +75,7 @@ export const getDashboardStats = async (req, res, next) => {
         totalRevenue: Math.round(totalRevenue * 100) / 100,
         totalTickets,
         activeUsers,
-        activeSubscriptions,
+        activePlans,
         pendingTickets,
         portfolioProjects
       }

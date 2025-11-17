@@ -7,13 +7,43 @@ const userSchema = new mongoose.Schema({
   passwordChangedAt: { type: Date, select: false },
   fName: { type: String, required: true },
   lName: { type: String, required: true },
-  phone: { type: String },
-  businessLocation: {
-    address: { type: String },
-    city: { type: String },
-    state: { type: String },
-    zipCode: { type: String },
-    country: { type: String, default: 'USA' }
+  companyName: { 
+    type: String,
+    required: [true, 'Company name is required'],
+    trim: true,
+    minlength: [2, 'Company name must be at least 2 characters long'],
+    maxlength: [100, 'Company name cannot exceed 100 characters']
+  },
+  phone: { 
+    type: String,
+    required: [true, 'Phone number is required'],
+    validate: {
+      validator: function(v) {
+        // Validates US phone numbers with or without country code
+        // Matches:
+        // (123) 456-7890
+        // 123-456-7890
+        // 123.456.7890
+        // 1234567890
+        // +1 (123) 456-7890
+        // +1 123-456-7890
+        // +1.123.456.7890
+        // +11234567890
+        return /^(?:\+?1[-.\s]?)?\(?([0-9]{3})\)?[-.\s]?([0-9]{3})[-.\s]?([0-9]{4})$/.test(v);
+      },
+      message: props => `${props.value} is not a valid US phone number! Please use format: (123) 456-7890`
+    },
+    set: function(v) {
+      // Format the phone number to a standard format: (123) 456-7890
+      if (!v) return v;
+      const cleaned = ('' + v).replace(/\D/g, '');
+      const match = cleaned.match(/^(1|)?(\d{3})(\d{3})(\d{4})$/);
+      if (match) {
+        const intlCode = match[1] ? '+1 ' : '';
+        return [intlCode, '(', match[2], ') ', match[3], '-', match[4]].join('');
+      }
+      return v;
+    }
   },
   oldWebsite: { type: String, default: '' },
   role: {
@@ -24,13 +54,17 @@ const userSchema = new mongoose.Schema({
   isApproved: { type: Boolean, default: false },
   isActive: { type: Boolean, default: true },
 
-  // Only for subscribers
-  activePlan: { type: mongoose.Schema.Types.ObjectId, ref: 'Plan', default: null },
-  planStartDate: { type: Date },
-  planExpiryDate: { type: Date },
-
   refreshTokens: [{ token: String, createdAt: { type: Date, default: Date.now } }],
 }, { timestamps: true });
+
+// Virtual field for full name
+userSchema.virtual('fullName').get(function() {
+  return `${this.fName} ${this.lName}`;
+});
+
+// Ensure virtual fields are included in JSON output
+userSchema.set('toJSON', { virtuals: true });
+userSchema.set('toObject', { virtuals: true });
 
 // Hash password
 userSchema.pre('save', async function (next) {

@@ -4,7 +4,9 @@ import PlanRequest from '../models/PlanRequest.js';
 import Service from '../models/Service.js';
 import Plan from '../models/Plan.js';
 import Client from '../models/Client.js';
+import Subscriber from '../models/Subscriber.js';
 import { AppError } from '../utils/errors.js';
+import { sendRejectionEmail } from '../utils/emailService.js';
 import { startOfMonth, endOfMonth, subMonths, format } from 'date-fns';
 import mongoose from 'mongoose';
 
@@ -32,17 +34,17 @@ export const getMonthlyRevenue = async (req, res, next) => {
       const result = await Client.aggregate([
         {
           $match: {
-            subscriptionStart: { $lte: end },
+            createdAt: { $lte: end },
             $or: [
-              { subscriptionEnd: { $gte: start } },
-              { subscriptionEnd: null }
+              { updatedAt: { $gte: start } },
+              { updatedAt: null }
             ]
           }
         },
         {
           $lookup: {
             from: 'plans',
-            localField: 'subscription.plan',
+            localField: 'currentPlan',
             foreignField: '_id',
             as: 'plan'
           }
@@ -163,29 +165,106 @@ export const getPendingUsers = async (req, res, next) => {
 };
 
 export const approveUser = async (req, res, next) => {
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
   try {
+    // 1. Update user's approval status
     const user = await User.findByIdAndUpdate(
       req.params.id,
-      { isApproved: true },
-      { new: true }
+      { 
+        isApproved: true,
+        role: 'client' // Ensure the role is set to client
+      },
+      { new: true, session }
     ).select('-password');
-    if (!user) return next(new AppError('User not found', 404));
+    
+    if (!user) {
+      await session.abortTransaction();
+      session.endSession();
+      return next(new AppError('User not found', 404));
+    }
 
-    res.json({ status: 'success', data: { user } });
+    // 2. Create a client record for the approved user
+    const clientData = {
+      user: user._id,
+      companyName: user.companyName || `${user.fName} ${user.lName}`,
+      isActive: true,
+      // Add any other default client fields here
+    };
+
+    // Check if client already exists (in case of re-approval)
+    let client = await Client.findOne({ user: user._id }).session(session);
+    
+    if (!client) {
+      // Create new client record if it doesn't exist
+      client = await Client.create([clientData], { session });
+      client = client[0]; // create returns an array
+    } else {
+      // Update existing client record
+      client = await Client.findByIdAndUpdate(
+        client._id,
+        { ...clientData, isActive: true },
+        { new: true, session }
+      );
+    }
+
+    await session.commitTransaction();
+    session.endSession();
+
+    res.json({ 
+      status: 'success', 
+      data: { 
+        user,
+        client 
+      } 
+    });
+
   } catch (err) {
+    await session.abortTransaction();
+    session.endSession();
     next(err);
   }
 };
 
 export const rejectUser = async (req, res, next) => {
-  try {
-    const user = await User.findByIdAndDelete(req.params.id);
-    if (!user) return next(new AppError('User not found', 404));
+  const session = await mongoose.startSession();
+  session.startTransaction();
 
-    // Optionally, you might want to send a notification email here
-    
-    res.json({ status: 'success', message: 'User rejected and deleted successfully' });
+  try {
+    // 1. Find the user first to get their details before deleting
+    const user = await User.findById(req.params.id).session(session);
+    if (!user) {
+      await session.abortTransaction();
+      session.endSession();
+      return next(new AppError('User not found', 404));
+    }
+
+    // 2. Delete the user
+    await User.findByIdAndDelete(req.params.id).session(session);
+
+    // 3. Send rejection email
+    try {
+      await sendRejectionEmail(
+        user.email, 
+        `${user.fName} ${user.lName}`.trim(),
+        req.body.reason // Optional reason from the request body
+      );
+    } catch (emailError) {
+      console.error('Failed to send rejection email:', emailError);
+      // Don't fail the operation if email sending fails
+    }
+
+    await session.commitTransaction();
+    session.endSession();
+
+    res.json({ 
+      status: 'success', 
+      message: 'User rejected and deleted successfully' 
+    });
   } catch (err) {
+    await session.abortTransaction();
+    session.endSession();
     next(err);
   }
 };
@@ -194,7 +273,7 @@ export const rejectUser = async (req, res, next) => {
 export const getPendingServiceRequests = async (req, res, next) => {
   try {
     const requests = await ServiceRequest.find({ status: 'pending' })
-      .populate('client', 'email fullName')
+      .populate('client', 'email fName lName fullName companyName phone')
       .populate('service', 'name');
     res.json({ status: 'success', data: { requests } });
   } catch (err) {
@@ -227,7 +306,7 @@ export const respondToServiceRequest = async (req, res, next) => {
 export const getPendingPlanRequests = async (req, res, next) => {
   try {
     const requests = await PlanRequest.find({ status: 'pending' })
-      .populate('client', 'email fullName')
+      .populate('client', 'email fName lName fullName companyName phone')
       .populate('plan', 'name price');
     res.json({ status: 'success', data: { requests } });
   } catch (err) {
@@ -353,6 +432,29 @@ export const toggleServiceStatus = async (req, res, next) => {
 };
 
 // === Plans CRUD ===
+export const getAllPlansForAdmin = async (req, res, next) => {
+  try {
+    console.log('getAllPlansForAdmin called');
+    const { featured } = req.query;
+    const query = {};
+    
+    if (featured) query.isFeatured = featured === 'true';
+    
+    console.log('Query:', query);
+    const plans = await Plan.find(query).sort({ createdAt: -1 });
+    console.log('Plans found:', plans.length);
+    
+    res.status(200).json({
+      status: 'success',
+      results: plans.length,
+      data: { plans }
+    });
+  } catch (error) {
+    console.error('Error in getAllPlansForAdmin:', error);
+    next(error);
+  }
+};
+
 export const createPlan = async (req, res, next) => {
   try {
     const plan = await Plan.create(req.body);
@@ -364,13 +466,54 @@ export const createPlan = async (req, res, next) => {
 
 export const updatePlan = async (req, res, next) => {
   try {
-    const plan = await Plan.findByIdAndUpdate(req.params.id, req.body, {
+    console.log('Backend updatePlan called with:', {
+      id: req.params.id,
+      body: req.body,
+      validationErrors: req.validationErrors?.array()
+    });
+    
+    // Handle discount removal explicitly
+    const updateData = { ...req.body };
+    if (req.body.discount === undefined || req.body.discount === null) {
+      // Use $unset to remove the discount field completely
+      delete updateData.discount;
+      
+      // Update the plan with all fields including price, then remove discount
+      const plan = await Plan.findByIdAndUpdate(
+        req.params.id,
+        updateData,
+        { new: true, runValidators: true }
+      );
+      
+      if (!plan) return next(new AppError('Plan not found', 404));
+      
+      // Now remove the discount field if needed
+      if (req.body.discount === undefined || req.body.discount === null) {
+        await Plan.findByIdAndUpdate(
+          req.params.id,
+          { $unset: { discount: 1 } },
+          { new: true, runValidators: false }
+        );
+        // Get the final updated plan
+        const finalPlan = await Plan.findById(req.params.id);
+        console.log('Plan updated with discount removal:', finalPlan);
+        return res.json({ status: 'success', data: { plan: finalPlan } });
+      }
+      
+      console.log('Plan updated successfully:', plan);
+      return res.json({ status: 'success', data: { plan } });
+    }
+
+    console.log('Update data before save:', updateData);
+    const plan = await Plan.findByIdAndUpdate(req.params.id, updateData, {
       new: true,
-      runValidators: true,
+      runValidators: true, // Re-enable with fixed validation
     });
     if (!plan) return next(new AppError('Plan not found', 404));
+    console.log('Plan updated successfully:', plan);
     res.json({ status: 'success', data: { plan } });
   } catch (err) {
+    console.error('Error updating plan:', err);
     next(err);
   }
 };
@@ -407,10 +550,10 @@ export const togglePlanStatus = async (req, res, next) => {
   }
 };
 
-// @desc    Convert client to subscriber with plan
-// @route   POST /api/v1/admin/convert-to-subscriber
+// @desc    Assign a plan to a user
+// @route   POST /api/v1/admin/assign-plan
 // @access  Private/Admin
-export const convertToSubscriber = async (req, res, next) => {
+export const assignPlan = async (req, res, next) => {
   try {
     const { userId, planId, startDate, endDate, customPrice, features } = req.body;
 
@@ -426,30 +569,56 @@ export const convertToSubscriber = async (req, res, next) => {
       return next(new AppError('Plan not found', 404));
     }
 
-    // Create subscription data
-    const subscription = {
-      plan: planId,
-      startDate: startDate || new Date(),
-      endDate: endDate || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), // 30 days from now
-      status: 'active',
-      price: customPrice || plan.price,
-      features: features || plan.features
-    };
-
-    // Update user role and subscription
+    // Update user role and current plan
     user.role = 'subscriber';
-    user.subscription = subscription;
     user.isApproved = true;
 
     // Update client record if exists
-    await Client.findOneAndUpdate(
+    const client = await Client.findOneAndUpdate(
       { user: userId },
       { 
         $set: { 
           currentPlan: planId,
-          status: 'active',
-          subscriptionDetails: subscription
+          status: 'active'
         } 
+      },
+      { new: true, upsert: true }
+    );
+
+    // Create or update subscriber record
+    const subscriberData = {
+      user: userId,
+      plan: {
+        plan: planId,
+        startDate: startDate ? new Date(startDate) : new Date(),
+        endDate: endDate ? new Date(endDate) : new Date(Date.now() + 365 * 24 * 60 * 60 * 1000), // 1 year from now
+        status: 'active',
+        approvalStatus: {
+          approved: true,
+          approvedBy: req.user.id,
+          approvedAt: new Date()
+        },
+        price: customPrice || plan.price,
+        features: features || plan.features,
+        billingCycle: plan.billingCycle
+      },
+      isActive: true,
+      status: 'active'
+    };
+
+    const subscriber = await Subscriber.findOneAndUpdate(
+      { user: userId },
+      { 
+        $set: subscriberData,
+        $push: { 
+          planHistory: subscriberData.plan,
+          paymentHistory: {
+            amount: subscriberData.plan.price,
+            date: new Date(),
+            status: 'completed',
+            paymentMethod: 'admin_assignment'
+          }
+        }
       },
       { new: true, upsert: true }
     );
@@ -463,9 +632,10 @@ export const convertToSubscriber = async (req, res, next) => {
         user: {
           id: user._id,
           email: user.email,
-          role: user.role,
-          subscription: user.subscription
-        }
+          role: user.role
+        },
+        client,
+        subscriber
       }
     });
   } catch (error) {
@@ -492,34 +662,67 @@ export const updateSubscription = async (req, res, next) => {
       if (!plan) {
         return next(new AppError('Plan not found', 404));
       }
-      user.subscription = user.subscription || {};
-      user.subscription.plan = updates.planId;
-      
       // Update role to subscriber if not already
       if (user.role === 'client') {
         user.role = 'subscriber';
       }
     }
 
-    // Update subscription fields
-    const allowedUpdates = ['startDate', 'endDate', 'status', 'price', 'features'];
-    allowedUpdates.forEach(update => {
-      if (updates[update] !== undefined) {
-        user.subscription = user.subscription || {};
-        user.subscription[update] = updates[update];
-      }
-    });
-
     // Update client record if exists
+    let client;
     if (updates.planId || updates.status) {
-      await Client.findOneAndUpdate(
+      client = await Client.findOneAndUpdate(
         { user: userId },
         { 
           $set: { 
-            currentPlan: updates.planId || user.subscription?.plan,
-            status: updates.status || 'active',
-            subscriptionDetails: user.subscription
+            currentPlan: updates.planId,
+            status: updates.status || 'active'
           } 
+        },
+        { new: true, upsert: true }
+      );
+    }
+
+    // Update subscriber record if plan is being updated
+    let subscriber;
+    if (updates.planId) {
+      const plan = await Plan.findById(updates.planId);
+      if (!plan) {
+        return next(new AppError('Plan not found', 404));
+      }
+
+      const subscriberData = {
+        plan: {
+          plan: updates.planId,
+          startDate: updates.startDate ? new Date(updates.startDate) : new Date(),
+          endDate: updates.endDate ? new Date(updates.endDate) : new Date(Date.now() + 365 * 24 * 60 * 60 * 1000),
+          status: updates.status || 'active',
+          approvalStatus: {
+            approved: true,
+            approvedBy: req.user.id,
+            approvedAt: new Date()
+          },
+          price: updates.customPrice || plan.price,
+          features: updates.features || plan.features,
+          billingCycle: plan.billingCycle
+        },
+        isActive: true,
+        status: updates.status || 'active'
+      };
+
+      subscriber = await Subscriber.findOneAndUpdate(
+        { user: userId },
+        { 
+          $set: subscriberData,
+          $push: { 
+            planHistory: subscriberData.plan,
+            paymentHistory: {
+              amount: subscriberData.plan.price,
+              date: new Date(),
+              status: 'completed',
+              paymentMethod: 'admin_update'
+            }
+          }
         },
         { new: true, upsert: true }
       );
@@ -529,8 +732,11 @@ export const updateSubscription = async (req, res, next) => {
 
     res.status(200).json({
       status: 'success',
+      message: 'Plan updated successfully',
       data: {
-        subscription: user.subscription
+        user,
+        client,
+        subscriber
       }
     });
   } catch (error) {
