@@ -96,7 +96,9 @@ app.use(cors({
     'http://localhost:8080',
     process.env.FRONTEND_URL,
     process.env.DASHBOARD_FRONTEND_URL,
-    process.env.USER_FRONTEND_URL
+    process.env.USER_FRONTEND_URL,
+    "https://xrttech.com",
+  "https://www.xrttech.com",
   ].filter(Boolean),
   credentials: true,
   ...corsOptions
