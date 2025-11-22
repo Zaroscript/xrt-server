@@ -56,7 +56,9 @@ const allowedOrigins = [
   'http://localhost:5173',  // Vite default port
   'http://127.0.0.1:5173',
   process.env.DASHBOARD_FRONTEND_URL,
-  process.env.USER_FRONTEND_URL
+  process.env.USER_FRONTEND_URL,
+  "https://xrttech.com",
+  "https://www.xrttech.com",
 ].filter(Boolean);
 
 // CORS configuration
