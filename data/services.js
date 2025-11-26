@@ -1,4 +1,28 @@
-export const sampleServices = [
+// server/data/seedServices.js
+import mongoose from 'mongoose';
+import dotenv from 'dotenv';
+import { fileURLToPath } from 'url';
+import { dirname, join } from 'path';
+import Service from '../models/Service.js';
+
+// Get the current directory path
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+
+// Load environment variables
+const envPath = join(process.cwd(), '.env');
+console.log('Loading .env from:', envPath);
+dotenv.config({ path: envPath, override: true });
+
+// Verify MongoDB URI is loaded
+const mongoUri = process.env.MONGODB_URI;
+if (!mongoUri) {
+  console.error('❌ Error: MONGO_URI is not defined in your .env file');
+  console.log('Current environment variables:', Object.keys(process.env).join(', '));
+  process.exit(1);
+}
+
+const sampleServices = [
   {
     name: 'Website Development',
     description: 'Custom website development tailored to your restaurant\'s needs, including responsive design and SEO optimization.',
@@ -114,13 +138,40 @@ export const sampleServices = [
   }
 ];
 
-export const getServicesByCategory = (services) => {
-  return services.reduce((acc, service) => {
-    const category = service.category || 'other';
-    if (!acc[category]) {
-      acc[category] = [];
+const seedSampleServices = async () => {
+  try {
+    console.log('🔌 Connecting to MongoDB...');
+    await mongoose.connect(mongoUri, {
+      useNewUrlParser: true,
+      useUnifiedTopology: true,
+    });
+    console.log('✅ Connected to MongoDB');
+
+    console.log('🧹 Clearing existing services...');
+    const deleteResult = await Service.deleteMany({});
+    console.log(`🗑️  Deleted ${deleteResult.deletedCount} services`);
+
+    console.log('🌱 Seeding services...');
+    const createdServices = await Service.insertMany(sampleServices);
+    console.log(`✅ Successfully seeded ${createdServices.length} services`);
+
+    console.log('🔌 Disconnecting from MongoDB...');
+    await mongoose.connection.close();
+    console.log('👋 MongoDB connection closed');
+    process.exit(0);
+  } catch (error) {
+    console.error('❌ Error seeding services:', error.message);
+    if (error.errors) {
+      console.error('Validation errors:', JSON.stringify(error.errors, null, 2));
     }
-    acc[category].push(service);
-    return acc;
-  }, {});
+    process.exit(1);
+  }
 };
+
+// Run the seed function if this file is executed directly
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  console.log('🚀 Starting seed process...');
+  seedSampleServices().catch(console.error);
+}
+
+export { sampleServices, seedSampleServices };

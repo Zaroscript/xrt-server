@@ -1,41 +1,38 @@
 import jwt from 'jsonwebtoken';
 
-const generateAccessToken = (user) => {
+export const generateAccessToken = (user) => {
   const payload = {
     id: user._id,
     email: user.email,
     role: user.role,
-    isApproved: user.isApproved
+    isApproved: user.isApproved,
   };
 
-  return jwt.sign(
-    payload,
-    process.env.JWT_SECRET,
-    { 
-      expiresIn: process.env.JWT_EXPIRES_IN || '15m',
-      algorithm: 'HS256'
-    }
-  );
+  return jwt.sign(payload, process.env.JWT_SECRET, {
+    expiresIn: process.env.JWT_EXPIRES_IN || "8h",
+    algorithm: "HS256",
+  });
 };
 
-const generateRefreshToken = (user) => {
-  return jwt.sign(
-    { id: user._id },
-    process.env.JWT_REFRESH_SECRET,
-    { 
-      expiresIn: process.env.JWT_REFRESH_EXPIRES_IN || '7d',
-      algorithm: 'HS256'
-    }
-  );
-};
-
-const verifyToken = (token, secret) => {
+export const verifyToken = (token) => {
   try {
-    return jwt.verify(token, secret, { algorithms: ['HS256'] });
+    return jwt.verify(token, process.env.JWT_SECRET, { 
+      algorithms: ["HS256"],
+      ignoreExpiration: false
+    });
   } catch (error) {
-    console.error('Token verification failed:', error.message);
-    return null;
+    console.error("Token verification failed:", error.message);
+    throw error;
   }
 };
 
-export { generateAccessToken, generateRefreshToken, verifyToken };
+export const generateRefreshToken = (user) => {
+  const payload = {
+    id: user._id,
+  };
+
+  return jwt.sign(payload, process.env.JWT_SECRET, {
+    expiresIn: "7d",
+    algorithm: "HS256",
+  });
+};

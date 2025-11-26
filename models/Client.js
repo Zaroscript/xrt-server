@@ -28,10 +28,49 @@ const clientSchema = new mongoose.Schema({
     type: Boolean, 
     default: true 
   },
-  // Reference to the services they've purchased
+  // Reference to the services they've purchased with additional details
   services: [{
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'Service'
+    service: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Service',
+      required: true
+    },
+    customPrice: {
+      type: Number,
+      required: true
+    },
+    discount: {
+      type: Number,
+      min: 0,
+      max: 100,
+      default: 0
+    },
+    startDate: {
+      type: Date,
+      default: Date.now
+    },
+    endDate: {
+      type: Date,
+      default: null
+    },
+    notes: {
+      type: String,
+      default: ''
+    },
+    assignedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      required: true
+    },
+    assignedAt: {
+      type: Date,
+      default: Date.now
+    },
+    status: {
+      type: String,
+      enum: ['active', 'paused', 'completed', 'cancelled'],
+      default: 'active'
+    }
   }],
   // Reference to their current plan
   currentPlan: {

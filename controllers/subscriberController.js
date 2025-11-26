@@ -1,7 +1,8 @@
-import Subscriber from '../models/Subscriber.js';
-import User from '../models/User.js';
-import Plan from '../models/Plan.js';
-import { AppError } from '../utils/errors.js';
+import Subscriber from "../models/Subscriber.js";
+import User from "../models/User.js";
+import Plan from "../models/Plan.js";
+import Client from "../models/Client.js";
+import { AppError } from "../utils/errors.js";
 
 // @desc    Get all subscribers
 // @route   GET /api/v1/admin/subscribers
@@ -9,13 +10,13 @@ import { AppError } from '../utils/errors.js';
 export const getAllSubscribers = async (req, res, next) => {
   try {
     const subscribers = await Subscriber.find({})
-      .populate('user', 'email fullName')
-      .populate('plan.plan', 'name price billingCycle');
-      
+      .populate("user", "email fName lName phone avatar")
+      .populate("plan.plan", "name price billingCycle");
+
     res.status(200).json({
-      status: 'success',
+      status: "success",
       results: subscribers.length,
-      data: { subscribers }
+      data: { subscribers },
     });
   } catch (error) {
     next(error);
@@ -27,16 +28,18 @@ export const getAllSubscribers = async (req, res, next) => {
 // @access  Private/Subscriber
 export const getMySubscriberProfile = async (req, res, next) => {
   try {
-    const subscriber = await Subscriber.findOne({ user: req.user.id })
-      .populate('plan.plan', 'name price billingCycle features');
-      
+    const subscriber = await Subscriber.findOne({ user: req.user.id }).populate(
+      "plan.plan",
+      "name price billingCycle features"
+    );
+
     if (!subscriber) {
-      return next(new AppError('Subscriber profile not found', 404));
+      return next(new AppError("Subscriber profile not found", 404));
     }
-    
+
     res.status(200).json({
-      status: 'success',
-      data: { subscriber }
+      status: "success",
+      data: { subscriber },
     });
   } catch (error) {
     next(error);
@@ -49,16 +52,16 @@ export const getMySubscriberProfile = async (req, res, next) => {
 export const getSubscriber = async (req, res, next) => {
   try {
     const subscriber = await Subscriber.findById(req.params.id)
-      .populate('user', 'email fullName')
-      .populate('plan.plan', 'name price billingCycle');
-      
+      .populate("user", "email fullName")
+      .populate("plan.plan", "name price billingCycle");
+
     if (!subscriber) {
-      return next(new AppError('No subscriber found with that ID', 404));
+      return next(new AppError("No subscriber found with that ID", 404));
     }
-    
+
     res.status(200).json({
-      status: 'success',
-      data: { subscriber }
+      status: "success",
+      data: { subscriber },
     });
   } catch (error) {
     next(error);
@@ -69,73 +72,104 @@ export const getSubscriber = async (req, res, next) => {
 // @access  Private/System (no auth required for scheduled jobs)
 export const autoSyncClientsToSubscribers = async () => {
   try {
-    console.log('Starting automatic sync of clients with current plans to subscribers...');
-    
+    console.log(
+      "Starting automatic sync of clients with current plans to subscribers..."
+    );
+
     // Find all clients that have a currentPlan
-    const clientsWithPlans = await Client.find({ 
-      currentPlan: { $exists: true, $ne: null } 
-    }).populate('user currentPlan');
-    
+    const clientsWithPlans = await Client.find({
+      currentPlan: { $exists: true, $ne: null },
+    }).populate("user currentPlan");
+
     console.log(`Found ${clientsWithPlans.length} clients with current plans`);
-    
+
     let syncedCount = 0;
     let skippedCount = 0;
     let errors = [];
-    
+
     for (const client of clientsWithPlans) {
       try {
+        // Skip if client has no user or plan data
+        if (!client.user || !client.currentPlan) {
+          console.log(
+            `Skipping client ${
+              client.companyName || "unknown"
+            } - missing user or plan data`
+          );
+          skippedCount++;
+          continue;
+        }
+
         // Check if subscriber already exists for this user
-        const existingSubscriber = await Subscriber.findOne({ user: client.user._id });
-        
+        const existingSubscriber = await Subscriber.findOne({
+          user: client.user._id,
+        });
+
         if (existingSubscriber) {
           // Update existing subscriber if plan changed
-          if (!existingSubscriber.plan || existingSubscriber.plan.plan.toString() !== client.currentPlan._id.toString()) {
+          if (
+            !existingSubscriber.plan ||
+            existingSubscriber.plan.plan.toString() !==
+              client.currentPlan._id.toString()
+          ) {
             existingSubscriber.plan = {
               plan: client.currentPlan._id,
               startDate: new Date(),
-              endDate: client.currentPlan.billingCycle === 'yearly' 
-                ? new Date(new Date().setFullYear(new Date().getFullYear() + 1))
-                : new Date(new Date().setMonth(new Date().getMonth() + 1)),
-              status: 'active',
+              endDate:
+                client.currentPlan.billingCycle === "yearly"
+                  ? new Date(
+                      new Date().setFullYear(new Date().getFullYear() + 1)
+                    )
+                  : new Date(new Date().setMonth(new Date().getMonth() + 1)),
+              status: "active",
               billingCycle: client.currentPlan.billingCycle,
               price: client.currentPlan.price,
               autoRenew: true,
               invoice: {
                 invoiceNumber: `INV-${Date.now()}-${syncedCount + 1}`,
-                dueDate: new Date(new Date().setDate(new Date().getDate() + 30)),
+                dueDate: new Date(
+                  new Date().setDate(new Date().getDate() + 30)
+                ),
                 amount: client.currentPlan.price,
-                status: 'pending'
-              }
+                status: "pending",
+              },
             };
             existingSubscriber.isActive = true;
-            existingSubscriber.status = 'active';
+            existingSubscriber.status = "active";
             await existingSubscriber.save();
-            console.log(`Updated subscriber for user ${client.user.email} with new plan ${client.currentPlan.name}`);
+            console.log(
+              `Updated subscriber for user ${client.user.email} with new plan ${client.currentPlan.name}`
+            );
             syncedCount++;
           } else {
-            console.log(`Subscriber already exists for user ${client.user.email} with same plan, skipping...`);
+            console.log(
+              `Subscriber already exists for user ${client.user.email} with same plan, skipping...`
+            );
             skippedCount++;
           }
           continue;
         }
-        
+
         // Update user role to subscriber
-        if (client.user.role !== 'subscriber') {
-          client.user.role = 'subscriber';
+        if (client.user.role !== "subscriber") {
+          client.user.role = "subscriber";
           await client.user.save({ validateBeforeSave: false });
-          console.log(`Updated user role to subscriber for ${client.user.email}`);
+          console.log(
+            `Updated user role to subscriber for ${client.user.email}`
+          );
         }
-        
+
         // Create new subscriber record
         const subscriberData = {
           user: client.user._id,
           plan: {
             plan: client.currentPlan._id,
             startDate: new Date(),
-            endDate: client.currentPlan.billingCycle === 'yearly' 
-              ? new Date(new Date().setFullYear(new Date().getFullYear() + 1))
-              : new Date(new Date().setMonth(new Date().getMonth() + 1)),
-            status: 'active',
+            endDate:
+              client.currentPlan.billingCycle === "yearly"
+                ? new Date(new Date().setFullYear(new Date().getFullYear() + 1))
+                : new Date(new Date().setMonth(new Date().getMonth() + 1)),
+            status: "active",
             billingCycle: client.currentPlan.billingCycle,
             price: client.currentPlan.price,
             autoRenew: true,
@@ -143,39 +177,44 @@ export const autoSyncClientsToSubscribers = async () => {
               invoiceNumber: `INV-${Date.now()}-${syncedCount + 1}`,
               dueDate: new Date(new Date().setDate(new Date().getDate() + 30)),
               amount: client.currentPlan.price,
-              status: 'pending'
-            }
+              status: "pending",
+            },
           },
           isActive: true,
-          status: 'active'
+          status: "active",
         };
-        
+
         const subscriber = await Subscriber.create(subscriberData);
-        console.log(`Created subscriber for user ${client.user.email} with plan ${client.currentPlan.name}`);
+        console.log(
+          `Created subscriber for user ${client.user.email} with plan ${client.currentPlan.name}`
+        );
         syncedCount++;
-        
       } catch (error) {
-        console.error(`Error processing client ${client.companyName} (user: ${client.user.email}):`, error);
+        console.error(
+          `Error processing client ${client.companyName} (user: ${client.user.email}):`,
+          error
+        );
         errors.push({
           client: client.companyName,
           user: client.user.email,
-          error: error.message
+          error: error.message,
         });
       }
     }
-    
-    console.log(`Auto-sync completed: ${syncedCount} created/updated, ${skippedCount} skipped, ${errors.length} errors`);
-    
+
+    console.log(
+      `Auto-sync completed: ${syncedCount} created/updated, ${skippedCount} skipped, ${errors.length} errors`
+    );
+
     return {
       totalClientsProcessed: clientsWithPlans.length,
       subscribersCreated: syncedCount,
       subscribersSkipped: skippedCount,
       errors: errors,
-      processedAt: new Date()
+      processedAt: new Date(),
     };
-    
   } catch (error) {
-    console.error('Auto-sync clients to subscribers error:', error);
+    console.error("Auto-sync clients to subscribers error:", error);
     throw error;
   }
 };
@@ -185,47 +224,67 @@ export const autoSyncClientsToSubscribers = async () => {
 // @access  Private/Admin
 export const syncClientsToSubscribers = async (req, res, next) => {
   try {
-    console.log('Starting sync of clients with current plans to subscribers...');
-    
+    console.log(
+      "Starting sync of clients with current plans to subscribers..."
+    );
+
     // Find all clients that have a currentPlan
-    const clientsWithPlans = await Client.find({ 
-      currentPlan: { $exists: true, $ne: null } 
-    }).populate('user currentPlan');
-    
+    const clientsWithPlans = await Client.find({
+      currentPlan: { $exists: true, $ne: null },
+    }).populate("user currentPlan");
+
     console.log(`Found ${clientsWithPlans.length} clients with current plans`);
-    
+
     let syncedCount = 0;
     let skippedCount = 0;
     let errors = [];
-    
+
     for (const client of clientsWithPlans) {
       try {
-        // Check if subscriber already exists for this user
-        const existingSubscriber = await Subscriber.findOne({ user: client.user._id });
-        
-        if (existingSubscriber) {
-          console.log(`Subscriber already exists for user ${client.user.email}, skipping...`);
+        // Skip if client has no user or plan data
+        if (!client.user || !client.currentPlan) {
+          console.log(
+            `Skipping client ${
+              client.companyName || "unknown"
+            } - missing user or plan data`
+          );
           skippedCount++;
           continue;
         }
-        
-        // Update user role to subscriber
-        if (client.user.role !== 'subscriber') {
-          client.user.role = 'subscriber';
-          await client.user.save({ validateBeforeSave: false });
-          console.log(`Updated user role to subscriber for ${client.user.email}`);
+
+        // Check if subscriber already exists for this user
+        const existingSubscriber = await Subscriber.findOne({
+          user: client.user._id,
+        });
+
+        if (existingSubscriber) {
+          console.log(
+            `Subscriber already exists for user ${client.user.email}, skipping...`
+          );
+          skippedCount++;
+          continue;
         }
-        
+
+        // Update user role to subscriber
+        if (client.user.role !== "subscriber") {
+          client.user.role = "subscriber";
+          await client.user.save({ validateBeforeSave: false });
+          console.log(
+            `Updated user role to subscriber for ${client.user.email}`
+          );
+        }
+
         // Create new subscriber record
         const subscriberData = {
           user: client.user._id,
           plan: {
             plan: client.currentPlan._id,
             startDate: new Date(),
-            endDate: client.currentPlan.billingCycle === 'yearly' 
-              ? new Date(new Date().setFullYear(new Date().getFullYear() + 1))
-              : new Date(new Date().setMonth(new Date().getMonth() + 1)),
-            status: 'active',
+            endDate:
+              client.currentPlan.billingCycle === "yearly"
+                ? new Date(new Date().setFullYear(new Date().getFullYear() + 1))
+                : new Date(new Date().setMonth(new Date().getMonth() + 1)),
+            status: "active",
             billingCycle: client.currentPlan.billingCycle,
             price: client.currentPlan.price,
             autoRenew: true,
@@ -233,43 +292,48 @@ export const syncClientsToSubscribers = async (req, res, next) => {
               invoiceNumber: `INV-${Date.now()}-${syncedCount + 1}`,
               dueDate: new Date(new Date().setDate(new Date().getDate() + 30)),
               amount: client.currentPlan.price,
-              status: 'pending'
-            }
+              status: "pending",
+            },
           },
           isActive: true,
-          status: 'active'
+          status: "active",
         };
-        
+
         const subscriber = await Subscriber.create(subscriberData);
-        console.log(`Created subscriber for user ${client.user.email} with plan ${client.currentPlan.name}`);
+        console.log(
+          `Created subscriber for user ${client.user.email} with plan ${client.currentPlan.name}`
+        );
         syncedCount++;
-        
       } catch (error) {
-        console.error(`Error processing client ${client.companyName} (user: ${client.user.email}):`, error);
+        console.error(
+          `Error processing client ${client.companyName} (user: ${client.user.email}):`,
+          error
+        );
         errors.push({
           client: client.companyName,
           user: client.user.email,
-          error: error.message
+          error: error.message,
         });
       }
     }
-    
-    console.log(`Sync completed: ${syncedCount} created, ${skippedCount} skipped, ${errors.length} errors`);
-    
+
+    console.log(
+      `Sync completed: ${syncedCount} created, ${skippedCount} skipped, ${errors.length} errors`
+    );
+
     res.status(200).json({
-      status: 'success',
-      message: 'Client to subscriber sync completed',
+      status: "success",
+      message: "Client to subscriber sync completed",
       data: {
         totalClientsProcessed: clientsWithPlans.length,
         subscribersCreated: syncedCount,
         subscribersSkipped: skippedCount,
         errors: errors,
-        processedAt: new Date()
-      }
+        processedAt: new Date(),
+      },
     });
-    
   } catch (error) {
-    console.error('Sync clients to subscribers error:', error);
+    console.error("Sync clients to subscribers error:", error);
     next(error);
   }
 };
@@ -284,27 +348,27 @@ export const createSubscriber = async (req, res, next) => {
     // Validate user
     const user = await User.findById(userId);
     if (!user) {
-      return next(new AppError('No user found with that ID', 404));
+      return next(new AppError("No user found with that ID", 404));
     }
-    
+
     // Update user role to subscriber if not already
-    if (user.role !== 'subscriber') {
-      user.role = 'subscriber';
+    if (user.role !== "subscriber") {
+      user.role = "subscriber";
       await user.save({ validateBeforeSave: false });
     }
-    
+
     // Get plan details
     const plan = await Plan.findById(planId);
     if (!plan) {
-      return next(new AppError('No plan found with that ID', 404));
+      return next(new AppError("No plan found with that ID", 404));
     }
-    
+
     // Create or update subscriber with pending approval status
     let subscriber = await Subscriber.findOne({ user: userId });
-    
+
     const subscriptionData = {
       plan: plan._id,
-      status: 'pending_approval',
+      status: "pending_approval",
       billingCycle: plan.billingCycle,
       price: plan.price,
       features: plan.features,
@@ -314,35 +378,35 @@ export const createSubscriber = async (req, res, next) => {
       endDate: null,
       approvalStatus: {
         approved: false,
-        notes: 'Awaiting admin approval'
+        notes: "Awaiting admin approval",
       },
       invoice: {
-        status: 'pending',
+        status: "pending",
         amount: plan.price,
         issueDate: null,
-        dueDate: null
-      }
+        dueDate: null,
+      },
     };
-    
+
     if (subscriber) {
-      // Archive current subscription if exists
-      if (subscriber.subscription) {
-        subscriber.subscriptionHistory.push({
-          ...subscriber.subscription.toObject(),
-          endDate: new Date()
+      // Archive current plan if exists
+      if (subscriber.plan) {
+        subscriber.planHistory.push({
+          ...subscriber.plan.toObject(),
+          endDate: new Date(),
         });
       }
-      
-      // Set new subscription with pending status
-      subscriber.subscription = subscriptionData;
-      subscriber.status = 'pending_approval';
+
+      // Set new plan with pending status
+      subscriber.plan = subscriptionData;
+      subscriber.status = "pending_approval";
     } else {
       // Create new subscriber with pending status
       subscriber = await Subscriber.create({
         user: userId,
-        subscription: subscriptionData,
-        status: 'pending_approval',
-        isActive: false
+        plan: subscriptionData,
+        status: "pending_approval",
+        isActive: false,
       });
     }
 
@@ -352,11 +416,11 @@ export const createSubscriber = async (req, res, next) => {
     // TODO: Send confirmation email to user
 
     res.status(201).json({
-      status: 'success',
-      message: 'Subscription request submitted. Waiting for admin approval.',
+      status: "success",
+      message: "Subscription request submitted. Waiting for admin approval.",
       data: {
-        subscriber
-      }
+        subscriber,
+      },
     });
   } catch (err) {
     next(err);
@@ -368,56 +432,59 @@ export const approveSubscription = async (req, res, next) => {
   try {
     const { subscriberId } = req.params;
     const { startDate, endDate, invoiceNumber, dueDate, notes } = req.body;
-    
+
     const subscriber = await Subscriber.findById(subscriberId);
     if (!subscriber) {
-      return next(new AppError('No subscriber found with that ID', 404));
+      return next(new AppError("No subscriber found with that ID", 404));
     }
-    
-    if (subscriber.subscription.status !== 'pending_approval') {
-      return next(new AppError('Subscription is not pending approval', 400));
+
+    if (subscriber.plan.status !== "pending_approval") {
+      return next(new AppError("Subscription is not pending approval", 400));
     }
-    
-    // Update subscription with approval details
-    subscriber.subscription.status = 'active';
-    subscriber.subscription.startDate = new Date(startDate) || new Date();
-    subscriber.subscription.endDate = new Date(endDate) || 
-      (subscriber.subscription.billingCycle === 'yearly'
-        ? new Date(new Date().setFullYear(new Date().getFullYear() + 1))
-        : new Date(new Date().setMonth(new Date().getMonth() + 1)));
-    
-    subscriber.subscription.approvalStatus = {
+
+    // Update plan with approval details
+    // Update plan with approval details
+    subscriber.plan.status = "active";
+    subscriber.plan.startDate = startDate ? new Date(startDate) : new Date();
+    subscriber.plan.endDate = endDate
+      ? new Date(endDate)
+      : subscriber.plan.billingCycle === "yearly"
+      ? new Date(new Date().setFullYear(new Date().getFullYear() + 1))
+      : new Date(new Date().setMonth(new Date().getMonth() + 1));
+
+    subscriber.plan.approvalStatus = {
       approved: true,
       approvedBy: req.user._id,
       approvedAt: new Date(),
-      notes: notes || 'Subscription approved by admin'
+      notes: notes || "Subscription approved by admin",
     };
-    
+
     // Set up invoice
-    subscriber.subscription.invoice = {
-      ...subscriber.subscription.invoice,
+    subscriber.plan.invoice = {
+      ...subscriber.plan.invoice,
       invoiceNumber,
       issueDate: new Date(),
-      dueDate: new Date(dueDate) || new Date(new Date().setDate(new Date().getDate() + 30)),
-      status: 'pending'
+      dueDate: dueDate
+        ? new Date(dueDate)
+        : new Date(new Date().setDate(new Date().getDate() + 30)),
+      status: "pending",
     };
-    
-    subscriber.status = 'active';
+
+    subscriber.status = "active";
     subscriber.isActive = true;
-    
+
     await subscriber.save();
-    
+
     // TODO: Send notification to user about approval
     // TODO: Send invoice to user
-    
+
     res.status(200).json({
-      status: 'success',
-      message: 'Subscription approved successfully',
+      status: "success",
+      message: "Subscription approved successfully",
       data: {
-        subscriber
-      }
+        subscriber,
+      },
     });
-    
   } catch (err) {
     next(err);
   }
@@ -428,35 +495,34 @@ export const rejectSubscription = async (req, res, next) => {
   try {
     const { subscriberId } = req.params;
     const { reason } = req.body;
-    
+
     const subscriber = await Subscriber.findById(subscriberId);
     if (!subscriber) {
-      return next(new AppError('No subscriber found with that ID', 404));
+      return next(new AppError("No subscriber found with that ID", 404));
     }
-    
-    subscriber.subscription.status = 'rejected';
-    subscriber.status = 'inactive';
+
+    subscriber.plan.status = "rejected";
+    subscriber.status = "inactive";
     subscriber.isActive = false;
-    
-    subscriber.subscription.approvalStatus = {
+
+    subscriber.plan.approvalStatus = {
       approved: false,
       approvedBy: req.user._id,
       approvedAt: new Date(),
-      notes: reason || 'Subscription rejected by admin'
+      notes: reason || "Subscription rejected by admin",
     };
-    
+
     await subscriber.save();
-    
+
     // TODO: Send rejection notification to user
-    
+
     res.status(200).json({
-      status: 'success',
-      message: 'Subscription rejected',
+      status: "success",
+      message: "Subscription rejected",
       data: {
-        subscriber
-      }
+        subscriber,
+      },
     });
-    
   } catch (err) {
     next(err);
   }
@@ -466,55 +532,55 @@ export const rejectSubscription = async (req, res, next) => {
 export const recordPayment = async (req, res, next) => {
   try {
     const { subscriberId } = req.params;
-    const { amount, paymentDate, paymentMethod, transactionId, notes } = req.body;
-    
+    const { amount, paymentDate, paymentMethod, transactionId, notes } =
+      req.body;
+
     const subscriber = await Subscriber.findById(subscriberId);
     if (!subscriber) {
-      return next(new AppError('No subscriber found with that ID', 404));
+      return next(new AppError("No subscriber found with that ID", 404));
     }
-    
-    if (subscriber.subscription.status !== 'active') {
-      return next(new AppError('Subscription is not active', 400));
+
+    if (subscriber.plan.status !== "active") {
+      return next(new AppError("Subscription is not active", 400));
     }
-    
+
     // Record payment
-    subscriber.subscription.invoice.paymentDetails = {
+    subscriber.plan.invoice.paymentDetails = {
       paymentDate: new Date(paymentDate) || new Date(),
       paymentMethod,
       transactionId,
-      notes
+      notes,
     };
-    
+
     // Update invoice status
-    subscriber.subscription.invoice.status = 'paid';
-    
+    subscriber.plan.invoice.status = "paid";
+
     // If subscription was pending payment, activate it
-    if (subscriber.status === 'pending_payment') {
-      subscriber.status = 'active';
+    if (subscriber.status === "pending_payment") {
+      subscriber.status = "active";
       subscriber.isActive = true;
-      subscriber.subscription.startDate = subscriber.subscription.startDate || new Date();
-      
+      subscriber.plan.startDate = subscriber.plan.startDate || new Date();
+
       // Set end date if not already set
-      if (!subscriber.subscription.endDate) {
-        subscriber.subscription.endDate = 
-          subscriber.subscription.billingCycle === 'yearly'
+      if (!subscriber.plan.endDate) {
+        subscriber.plan.endDate =
+          subscriber.plan.billingCycle === "yearly"
             ? new Date(new Date().setFullYear(new Date().getFullYear() + 1))
             : new Date(new Date().setMonth(new Date().getMonth() + 1));
       }
     }
-    
+
     await subscriber.save();
-    
+
     // TODO: Send payment confirmation to user
-    
+
     res.status(200).json({
-      status: 'success',
-      message: 'Payment recorded successfully',
+      status: "success",
+      message: "Payment recorded successfully",
       data: {
-        subscriber
-      }
+        subscriber,
+      },
     });
-    
   } catch (err) {
     next(err);
   }
@@ -525,51 +591,78 @@ export const recordPayment = async (req, res, next) => {
 // @access  Private/Admin
 export const updateSubscriber = async (req, res, next) => {
   try {
-    const { subscription, billingInfo, preferences } = req.body;
-    
+    const { plan, billingInfo, preferences } = req.body;
+
     const subscriber = await Subscriber.findById(req.params.id);
     if (!subscriber) {
-      return next(new AppError('No subscriber found with that ID', 404));
+      return next(new AppError("No subscriber found with that ID", 404));
     }
-    
-    // Update subscription if provided
-    if (subscription) {
-      // Add current subscription to history if it exists and is being updated
-      if (subscriber.subscription && 
-          (subscription.plan || subscription.status || subscription.endDate)) {
-        subscriber.subscriptionHistory.push({
-          ...subscriber.subscription.toObject(),
-          endDate: new Date()
+
+    // Update plan if provided
+    if (plan) {
+      // Add current plan to history if it exists and is being updated
+      if (subscriber.plan && (plan.plan || plan.status || plan.endDate)) {
+        subscriber.planHistory.push({
+          ...subscriber.plan.toObject(),
+          endDate: new Date(),
         });
       }
-      
-      // Update subscription fields
-      Object.keys(subscription).forEach(key => {
-        subscriber.subscription[key] = subscription[key];
+
+      // Update plan fields
+      Object.keys(plan).forEach((key) => {
+        subscriber.plan[key] = plan[key];
       });
     }
-    
+
     // Update billing info if provided
     if (billingInfo) {
       subscriber.billingInfo = {
         ...subscriber.billingInfo,
-        ...billingInfo
+        ...billingInfo,
       };
     }
-    
+
     // Update preferences if provided
     if (preferences) {
       subscriber.preferences = {
         ...subscriber.preferences,
-        ...preferences
+        ...preferences,
       };
     }
-    
+
+    // Allow updating top-level fields directly
+    const allowedUpdates = ["status", "isActive", "notes"];
+    Object.keys(req.body).forEach((key) => {
+      if (allowedUpdates.includes(key)) {
+        subscriber[key] = req.body[key];
+
+        // Sync plan status if top-level status changes
+        if (key === "status" && subscriber.plan) {
+          if (req.body[key] === "active") {
+            subscriber.plan.status = "active";
+          } else if (req.body[key] === "suspended") {
+            // Don't change plan.status for suspended users
+            // Plan remains "active" but user access is suspended
+            // This is because plan.status enum doesn't include "suspended"
+          } else if (req.body[key] === "inactive") {
+            // Keep plan status as is for inactive users
+            // Could optionally set to "cancelled" if needed
+          }
+        }
+      }
+    });
+
     await subscriber.save();
-    
+
+    // Populate the subscriber before returning to ensure all data is present
+    await subscriber.populate([
+      { path: "user", select: "email fName lName phone avatar" },
+      { path: "plan.plan", select: "name price billingCycle features" },
+    ]);
+
     res.status(200).json({
-      status: 'success',
-      data: { subscriber }
+      status: "success",
+      data: { subscriber },
     });
   } catch (error) {
     next(error);
@@ -581,18 +674,29 @@ export const updateSubscriber = async (req, res, next) => {
 // @access  Private/Admin
 export const deleteSubscriber = async (req, res, next) => {
   try {
-    const subscriber = await Subscriber.findByIdAndDelete(req.params.id);
-    
+    const subscriber = await Subscriber.findById(req.params.id);
+
     if (!subscriber) {
-      return next(new AppError('No subscriber found with that ID', 404));
+      return next(new AppError("No subscriber found with that ID", 404));
     }
-    
-    // Optionally, you might want to downgrade the user role
-    await User.findByIdAndUpdate(subscriber.user, { role: 'user' });
-    
+
+    // Find and update the associated client - remove plan but keep client data
+    const client = await Client.findOne({ user: subscriber.user });
+    if (client) {
+      client.currentPlan = null;
+      await client.save();
+      console.log(`Removed plan from client ${client.companyName}`);
+    }
+
+    // Delete the subscriber record
+    await Subscriber.findByIdAndDelete(req.params.id);
+
+    // Downgrade the user role from subscriber to user
+    await User.findByIdAndUpdate(subscriber.user, { role: "user" });
+
     res.status(204).json({
-      status: 'success',
-      data: null
+      status: "success",
+      data: null,
     });
   } catch (error) {
     next(error);
@@ -605,23 +709,23 @@ export const deleteSubscriber = async (req, res, next) => {
 export const toggleSubscriberStatus = async (req, res, next) => {
   try {
     const subscriber = await Subscriber.findById(req.params.id);
-    
+
     if (!subscriber) {
-      return next(new AppError('No subscriber found with that ID', 404));
+      return next(new AppError("No subscriber found with that ID", 404));
     }
-    
+
     subscriber.isActive = !subscriber.isActive;
-    subscriber.status = subscriber.isActive ? 'active' : 'inactive';
-    
-    if (subscriber.subscription) {
-      subscriber.subscription.status = subscriber.isActive ? 'active' : 'suspended';
+    subscriber.status = subscriber.isActive ? "active" : "inactive";
+
+    if (subscriber.plan) {
+      subscriber.plan.status = subscriber.isActive ? "active" : "suspended";
     }
-    
+
     await subscriber.save();
-    
+
     res.status(200).json({
-      status: 'success',
-      data: { subscriber }
+      status: "success",
+      data: { subscriber },
     });
   } catch (error) {
     next(error);
@@ -634,24 +738,24 @@ export const toggleSubscriberStatus = async (req, res, next) => {
 export const getMyPlanHistory = async (req, res, next) => {
   try {
     const subscriber = await Subscriber.findOne({ user: req.user.id })
-      .select('planHistory plan')
-      .populate('plan.plan', 'name price billingCycle')
-      .populate('planHistory.plan', 'name price billingCycle');
-      
+      .select("planHistory plan")
+      .populate("plan.plan", "name price billingCycle")
+      .populate("planHistory.plan", "name price billingCycle");
+
     if (!subscriber) {
-      return next(new AppError('Subscriber profile not found', 404));
+      return next(new AppError("Subscriber profile not found", 404));
     }
-    
+
     // Combine current plan with history
     const history = [
       ...(subscriber.plan ? [subscriber.plan] : []),
-      ...(subscriber.planHistory || [])
+      ...(subscriber.planHistory || []),
     ].sort((a, b) => new Date(b.startDate) - new Date(a.startDate));
-    
+
     res.status(200).json({
-      status: 'success',
+      status: "success",
       results: history.length,
-      data: { history }
+      data: { history },
     });
   } catch (error) {
     next(error);
@@ -664,23 +768,23 @@ export const getMyPlanHistory = async (req, res, next) => {
 export const updateMyPreferences = async (req, res, next) => {
   try {
     const { preferences } = req.body;
-    
+
     const subscriber = await Subscriber.findOne({ user: req.user.id });
-    
+
     if (!subscriber) {
-      return next(new AppError('Subscriber profile not found', 404));
+      return next(new AppError("Subscriber profile not found", 404));
     }
-    
+
     subscriber.preferences = {
       ...subscriber.preferences,
-      ...preferences
+      ...preferences,
     };
-    
+
     await subscriber.save();
-    
+
     res.status(200).json({
-      status: 'success',
-      data: { subscriber }
+      status: "success",
+      data: { subscriber },
     });
   } catch (error) {
     next(error);
@@ -693,30 +797,43 @@ export const updateMyPreferences = async (req, res, next) => {
 export const getSubscriberStats = async (req, res, next) => {
   try {
     const totalSubscribers = await Subscriber.countDocuments();
-    const activeSubscribers = await Subscriber.countDocuments({ status: 'active' });
-    const inactiveSubscribers = await Subscriber.countDocuments({ status: 'inactive' });
-    const pendingApproval = await Subscriber.countDocuments({ status: 'pending_approval' });
-    
+    const activeSubscribers = await Subscriber.countDocuments({
+      status: "active",
+    });
+    const inactiveSubscribers = await Subscriber.countDocuments({
+      status: "inactive",
+    });
+    const pendingApproval = await Subscriber.countDocuments({
+      status: "pending_approval",
+    });
+
     // Calculate churn rate (inactive / total)
-    const churnRate = totalSubscribers > 0 ? ((inactiveSubscribers / totalSubscribers) * 100).toFixed(1) : 0;
-    
+    const churnRate =
+      totalSubscribers > 0
+        ? ((inactiveSubscribers / totalSubscribers) * 100).toFixed(1)
+        : 0;
+
     // Calculate Monthly Recurring Revenue (MRR)
-    const activeSubscriptions = await Subscriber.find({ status: 'active' }).populate('subscription.plan');
+    const activeSubscriptions = await Subscriber.find({
+      status: "active",
+    }).populate("plan.plan");
     const monthlyRecurringRevenue = activeSubscriptions.reduce((total, sub) => {
-      if (sub.subscription && sub.subscription.plan) {
-        const price = sub.subscription.plan.price || 0;
+      if (sub.plan && sub.plan.plan) {
+        const price = sub.plan.plan.price || 0;
         // Convert yearly to monthly
-        const monthlyPrice = sub.subscription.billingCycle === 'yearly' ? price / 12 : price;
+        const monthlyPrice =
+          sub.plan.billingCycle === "yearly" ? price / 12 : price;
         return total + monthlyPrice;
       }
       return total;
     }, 0);
-    
+
     // Calculate Average Revenue Per Subscriber
-    const averageRevenuePerSubscriber = activeSubscribers > 0 ? monthlyRecurringRevenue / activeSubscribers : 0;
-    
+    const averageRevenuePerSubscriber =
+      activeSubscribers > 0 ? monthlyRecurringRevenue / activeSubscribers : 0;
+
     res.status(200).json({
-      status: 'success',
+      status: "success",
       data: {
         totalSubscribers,
         activeSubscribers,
@@ -724,8 +841,10 @@ export const getSubscriberStats = async (req, res, next) => {
         pendingApproval,
         churnRate: parseFloat(churnRate),
         monthlyRecurringRevenue: parseFloat(monthlyRecurringRevenue.toFixed(2)),
-        averageRevenuePerSubscriber: parseFloat(averageRevenuePerSubscriber.toFixed(2))
-      }
+        averageRevenuePerSubscriber: parseFloat(
+          averageRevenuePerSubscriber.toFixed(2)
+        ),
+      },
     });
   } catch (error) {
     next(error);
@@ -737,55 +856,69 @@ export const getSubscriberStats = async (req, res, next) => {
 // @access  Private/Admin
 export const getSubscriberGrowth = async (req, res, next) => {
   try {
-    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    const months = [
+      "Jan",
+      "Feb",
+      "Mar",
+      "Apr",
+      "May",
+      "Jun",
+      "Jul",
+      "Aug",
+      "Sep",
+      "Oct",
+      "Nov",
+      "Dec",
+    ];
     const currentYear = new Date().getFullYear();
     const growthData = [];
-    
+
     // Get subscriber growth for the last 7 months
     for (let i = 6; i >= 0; i--) {
       const date = new Date();
       date.setMonth(date.getMonth() - i);
       const monthName = months[date.getMonth()];
       const year = date.getFullYear();
-      
+
       // Count subscribers created in this month
       const startDate = new Date(year, date.getMonth(), 1);
       const endDate = new Date(year, date.getMonth() + 1, 0, 23, 59, 59);
-      
+
       const subscribersInMonth = await Subscriber.countDocuments({
-        createdAt: { $gte: startDate, $lte: endDate }
+        createdAt: { $gte: startDate, $lte: endDate },
       });
-      
+
       // Calculate revenue from active subscribers in this month
       const activeSubscriptionsInMonth = await Subscriber.find({
-        status: 'active',
-        'subscription.startDate': { $lte: endDate },
+        status: "active",
+        "plan.startDate": { $lte: endDate },
         $or: [
-          { 'subscription.endDate': { $gte: startDate } },
-          { 'subscription.endDate': null }
-        ]
-      }).populate('subscription.plan');
-      
+          { "plan.endDate": { $gte: startDate } },
+          { "plan.endDate": null },
+        ],
+      }).populate("plan.plan");
+
       const revenueInMonth = activeSubscriptionsInMonth.reduce((total, sub) => {
-        if (sub.subscription && sub.subscription.plan) {
-          const price = sub.subscription.plan.price || 0;
+        if (sub.plan && sub.plan.plan) {
+          const price = sub.plan.plan.price || 0;
           // Convert yearly to monthly
-          const monthlyPrice = sub.subscription.billingCycle === 'yearly' ? price / 12 : price;
+          const monthlyPrice =
+            sub.plan.billingCycle === "yearly" ? price / 12 : price;
           return total + monthlyPrice;
         }
         return total;
       }, 0);
-      
+
       growthData.push({
         name: monthName,
         subscribers: subscribersInMonth,
-        revenue: parseFloat(revenueInMonth.toFixed(2))
+        revenue: parseFloat(revenueInMonth.toFixed(2)),
       });
     }
-    
+
     res.status(200).json({
-      status: 'success',
-      data: growthData
+      status: "success",
+      data: growthData,
     });
   } catch (error) {
     next(error);
@@ -799,29 +932,36 @@ export const getPlanDistribution = async (req, res, next) => {
   try {
     // Aggregate subscribers by plan
     const planDistribution = await Subscriber.aggregate([
-      { $match: { status: 'active' } },
-      { $lookup: { from: 'plans', localField: 'subscription.plan', foreignField: '_id', as: 'planInfo' } },
-      { $unwind: '$planInfo' },
-      { 
-        $group: {
-          _id: '$planInfo.name',
-          count: { $sum: 1 },
-          avgPrice: { $avg: '$planInfo.price' }
-        }
+      { $match: { status: "active" } },
+      {
+        $lookup: {
+          from: "plans",
+          localField: "plan.plan",
+          foreignField: "_id",
+          as: "planInfo",
+        },
       },
-      { $sort: { count: -1 } }
+      { $unwind: "$planInfo" },
+      {
+        $group: {
+          _id: "$planInfo.name",
+          count: { $sum: 1 },
+          avgPrice: { $avg: "$planInfo.price" },
+        },
+      },
+      { $sort: { count: -1 } },
     ]);
-    
+
     // Format data for charts
-    const formattedData = planDistribution.map(item => ({
+    const formattedData = planDistribution.map((item) => ({
       name: item._id,
       value: item.count,
-      count: item.count
+      count: item.count,
     }));
-    
+
     res.status(200).json({
-      status: 'success',
-      data: formattedData
+      status: "success",
+      data: formattedData,
     });
   } catch (error) {
     next(error);

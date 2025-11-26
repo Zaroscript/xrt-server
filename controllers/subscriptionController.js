@@ -3,6 +3,7 @@ import Transaction from '../models/Transaction.js';
 import Client from '../models/Client.js';
 import Service from '../models/Service.js';
 import { AppError } from '../utils/errors.js';
+import Subscription from '../models/Subscription.js';
 
 // @desc    Create a new plan subscription
 // @route   POST /api/v1/plans/subscribe
@@ -275,6 +276,168 @@ export const cancelMyPlan = async (req, res, next) => {
   }
 };
 
+// @desc    Subscribe client to plan (Admin)
+// @route   POST /api/v1/subscriptions/admin/subscribe
+// @access  Private/Admin
+export const adminSubscribeClient = async (req, res, next) => {
+  try {
+    const { clientId, planId, billingCycle, customPrice, startDate, paymentMethod } = req.body;
+
+    // Validate input
+    if (!clientId || !planId || !billingCycle) {
+      return next(new AppError('Missing required fields', 400));
+    }
+
+    // Check if client exists
+    const client = await Client.findById(clientId);
+    if (!client) {
+      return next(new AppError('Client not found', 404));
+    }
+
+    // Check if plan exists
+    const plan = await Plan.findById(planId);
+    if (!plan) {
+      return next(new AppError('Plan not found', 404));
+    }
+
+    // Calculate dates
+    const start = startDate ? new Date(startDate) : new Date();
+    const end = new Date(start);
+    
+    switch (billingCycle) {
+      case 'monthly':
+        end.setMonth(end.getMonth() + 1);
+        break;
+      case 'quarterly':
+        end.setMonth(end.getMonth() + 3);
+        break;
+      case 'annually':
+        end.setFullYear(end.getFullYear() + 1);
+        break;
+      default:
+        return next(new AppError('Invalid billing cycle', 400));
+    }
+
+    // Create subscription
+    const subscription = await Subscription.create({
+      client: clientId,
+      plan: planId,
+      status: 'active',
+      startDate: start,
+      endDate: end,
+      nextBillingDate: end,
+      billingCycle,
+      customPrice: customPrice || undefined,
+      paymentMethod: paymentMethod || 'other',
+      autoRenew: true
+    });
+
+    // Update client's current plan
+    client.currentPlan = planId;
+    await client.save();
+
+    // Auto-generate invoice
+    const amount = customPrice !== undefined ? customPrice : plan.price;
+    
+    const invoice = await Invoice.create({
+      client: clientId,
+      amount,
+      status: 'pending',
+      issueDate: new Date(),
+      dueDate: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), // 30 days due
+      items: [{
+        description: `Subscription to ${plan.name} (${billingCycle})`,
+        quantity: 1,
+        price: amount
+      }],
+      notes: `Auto-generated invoice for subscription to ${plan.name}`
+    });
+    
+    res.status(201).json({
+      status: 'success',
+      data: {
+        subscription,
+        client,
+        invoice
+      }
+    });
+
+  } catch (error) {
+    next(error);
+  }
+};
+
+// @desc    Update subscription (Admin)
+// @route   PATCH /api/v1/subscriptions/:id
+// @access  Private/Admin
+export const updateSubscription = async (req, res, next) => {
+  try {
+    const { status, customPrice, billingCycle, endDate, nextBillingDate } = req.body;
+    
+    const subscription = await Subscription.findById(req.params.id);
+    if (!subscription) {
+      return next(new AppError('Subscription not found', 404));
+    }
+
+    if (status) subscription.status = status;
+    if (customPrice !== undefined) subscription.customPrice = customPrice;
+    if (billingCycle) subscription.billingCycle = billingCycle;
+    if (endDate) subscription.endDate = endDate;
+    if (nextBillingDate) subscription.nextBillingDate = nextBillingDate;
+
+    await subscription.save();
+
+    res.status(200).json({
+      status: 'success',
+      data: {
+        subscription
+      }
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * @swagger
+ * /api/v1/plans/upcoming-renewals:
+ *   get:
+ *     summary: Get upcoming plan renewals
+ *     tags: [Plans]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: days
+ *         schema:
+ *           type: integer
+ *         description: Number of days to look ahead for renewals (default: 7)
+ *     responses:
+ *       200:
+ *         description: List of upcoming renewals
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 status:
+ *                   type: string
+ *                 results:
+ *                   type: integer
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     renewals:
+ *                       type: array
+ *                       items:
+ *                         $ref: '#/components/schemas/Client'
+ *       401:
+ *         description: Unauthorized
+ *       403:
+ *         description: Forbidden - Admin access required
+ *       500:
+ *         description: Server error
+ */
 export const getUpcomingRenewals = async (req, res, next) => {
   try {
     if (!['super_admin', 'moderator'].includes(req.user.role)) {
@@ -299,6 +462,80 @@ export const getUpcomingRenewals = async (req, res, next) => {
       results: renewals.length,
       data: {
         renewals
+      }
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * @swagger
+ * /api/v1/subscriptions/{id}/suspend:
+ *   patch:
+ *     summary: Suspend a subscription
+ *     tags: [Subscriptions]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Subscription ID
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - reason
+ *             properties:
+ *               reason:
+ *                 type: string
+ *                 description: Reason for suspension
+ *     responses:
+ *       200:
+ *         description: Subscription suspended successfully
+ *       400:
+ *         description: Invalid input
+ *       401:
+ *         description: Unauthorized
+ *       404:
+ *         description: Subscription not found
+ *       500:
+ *         description: Server error
+ */
+export const suspendSubscription = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { reason } = req.body;
+    const userId = req.user._id;
+
+    // Find the subscription
+    const subscription = await Subscription.findById(id);
+    if (!subscription) {
+      return next(new AppError('Subscription not found', 404));
+    }
+
+    // Check if user has permission to suspend this subscription
+    if (subscription.user.toString() !== userId.toString() && !['admin', 'super_admin'].includes(req.user.role)) {
+      return next(new AppError('Not authorized to perform this action', 403));
+    }
+
+    // Update subscription status
+    subscription.status = 'suspended';
+    subscription.suspensionReason = reason;
+    subscription.suspendedAt = new Date();
+    
+    await subscription.save();
+
+    res.status(200).json({
+      status: 'success',
+      data: {
+        subscription
       }
     });
   } catch (error) {

@@ -3,7 +3,6 @@ import mongoose from 'mongoose';
 const invoiceSchema = new mongoose.Schema({
   invoiceNumber: {
     type: String,
-    required: true,
     unique: true,
   },
   client: {

@@ -30,7 +30,13 @@ const getInvoices = async (req, res, next) => {
       .populate('user', 'fName lName email')
       .sort('-createdAt');
       
-    res.json(invoices);
+    res.json({
+      status: 'success',
+      results: invoices.length,
+      data: {
+        invoices
+      }
+    });
   } catch (error) {
     next(error);
   }
@@ -49,7 +55,12 @@ const getInvoiceById = async (req, res, next) => {
       throw new NotFoundError('Invoice not found');
     }
     
-    res.json(invoice);
+    res.json({
+      status: 'success',
+      data: {
+        invoice
+      }
+    });
   } catch (error) {
     next(error);
   }
@@ -77,7 +88,12 @@ const createInvoice = async (req, res, next) => {
     await invoice.populate('client', 'companyName email');
     await invoice.populate('user', 'fName lName email');
     
-    res.status(201).json(invoice);
+    res.status(201).json({
+      status: 'success',
+      data: {
+        invoice
+      }
+    });
   } catch (error) {
     next(error);
   }
@@ -107,7 +123,12 @@ const updateInvoice = async (req, res, next) => {
       throw new NotFoundError('Invoice not found');
     }
     
-    res.json(invoice);
+    res.json({
+      status: 'success',
+      data: {
+        invoice
+      }
+    });
   } catch (error) {
     next(error);
   }
@@ -124,7 +145,11 @@ const deleteInvoice = async (req, res, next) => {
       throw new NotFoundError('Invoice not found');
     }
     
-    res.json({ message: 'Invoice removed' });
+    res.json({
+      status: 'success',
+      message: 'Invoice removed',
+      data: null
+    });
   } catch (error) {
     next(error);
   }

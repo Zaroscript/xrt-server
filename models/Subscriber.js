@@ -22,9 +22,9 @@ const planSchema = new mongoose.Schema(
     },
     approvalStatus: {
       approved: { type: Boolean, default: false },
-      approvedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+      approvedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
       approvedAt: Date,
-      notes: String
+      notes: String,
     },
     invoice: {
       invoiceNumber: String,
@@ -34,18 +34,18 @@ const planSchema = new mongoose.Schema(
       status: {
         type: String,
         enum: ["pending", "paid", "overdue", "cancelled"],
-        default: "pending"
+        default: "pending",
       },
       paymentDetails: {
         paymentDate: Date,
         paymentMethod: String,
         transactionId: String,
-        notes: String
-      }
+        notes: String,
+      },
     },
     billingCycle: {
       type: String,
-      enum: ["monthly", "yearly"],
+      enum: ["monthly", "quarterly", "annually"],
       required: true,
     },
     price: {
@@ -126,6 +126,7 @@ const subscriberSchema = new mongoose.Schema(
         default: false,
       },
     },
+    notes: String,
   },
   { timestamps: true }
 );
@@ -161,10 +162,7 @@ subscriberSchema.methods.updatePlanStatus = function () {
 };
 
 // Method to renew plan
-subscriberSchema.methods.renewPlan = async function (
-  plan,
-  paymentInfo = {}
-) {
+subscriberSchema.methods.renewPlan = async function (plan, paymentInfo = {}) {
   const newPlan = {
     plan: plan._id,
     startDate: new Date(),
