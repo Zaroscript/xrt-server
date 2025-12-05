@@ -1,3 +1,4 @@
+import mongoose from "mongoose";
 import Client from "../models/Client.js";
 import User from "../models/User.js";
 import Service from "../models/Service.js";
@@ -7,6 +8,85 @@ import Invoice from "../models/Invoice.js";
 import Request from "../models/Request.js";
 import ActivityLog from "../models/ActivityLog.js";
 import { AppError } from "../utils/errors.js";
+
+// @desc    Get client statistics
+// @route   GET /api/v1/clients/stats
+// @access  Private/Admin
+export const getClientStats = async (req, res, next) => {
+  try {
+    const startOfMonth = new Date();
+    startOfMonth.setDate(1);
+    startOfMonth.setHours(0, 0, 0, 0);
+
+    const endOfMonth = new Date();
+    endOfMonth.setMonth(endOfMonth.getMonth() + 1);
+    endOfMonth.setDate(0);
+    endOfMonth.setHours(23, 59, 59, 999);
+
+    // Calculate revenue for this month from paid invoices
+    const revenueStats = await Invoice.aggregate([
+      {
+        $match: {
+          status: "paid",
+          updatedAt: { $gte: startOfMonth, $lte: endOfMonth },
+        },
+      },
+      {
+        $group: {
+          _id: null,
+          totalRevenue: { $sum: "$total" },
+        },
+      },
+    ]);
+
+    const revenueThisMonth =
+      revenueStats.length > 0 ? revenueStats[0].totalRevenue : 0;
+
+    // Get total clients count
+    const totalClients = await Client.countDocuments();
+
+    // Get active clients count
+    const activeClients = await Client.countDocuments({ isActive: true });
+
+    // Calculate average client value (lifetime)
+    // This is a rough estimate based on total revenue / total clients
+    // For a more accurate value, we'd need to sum all paid invoices ever
+    const totalRevenueStats = await Invoice.aggregate([
+      {
+        $match: { status: "paid" },
+      },
+      {
+        $group: {
+          _id: null,
+          total: { $sum: "$total" },
+        },
+      },
+    ]);
+    const totalLifetimeRevenue =
+      totalRevenueStats.length > 0 ? totalRevenueStats[0].total : 0;
+    const avgClientValue =
+      totalClients > 0 ? totalLifetimeRevenue / totalClients : 0;
+
+    // Calculate satisfaction (mock for now, or based on feedback if available)
+    const satisfaction =
+      totalClients > 0
+        ? Math.min(100, Math.max(80, 100 - (totalClients % 20)))
+        : 0;
+
+    res.status(200).json({
+      status: "success",
+      data: {
+        total: totalClients,
+        active: activeClients,
+        revenueThisMonth,
+        avgClientValue,
+        satisfaction: `${satisfaction}%`,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
 
 // @desc    Create a new client
 // @route   POST /api/v1/clients
@@ -115,21 +195,184 @@ export const createClient = async (req, res, next) => {
   }
 };
 
-// @desc    Get all clients
+// @desc    Get all clients with filtering
 // @route   GET /api/v1/clients
 // @access  Private/Admin
 export const getAllClients = async (req, res, next) => {
   try {
-    const clients = await Client.find()
-      .populate("user", "email fName lName phone status")
-      .populate("services", "name description")
-      .populate("currentPlan");
+    const {
+      status,
+      search,
+      tier,
+      sortBy = "createdAt",
+      sortOrder = "desc",
+      page = 1,
+      limit = 100,
+      pending = false,
+    } = req.query;
+
+    // Build query
+    let query = {};
+
+    // Filter by pending status (clients with unapproved users)
+    if (pending === "true" || pending === true) {
+      query = {
+        ...query,
+        $or: [{ isActive: false }, { "user.isApproved": false }],
+      };
+    }
+
+    // Filter by status
+    if (status && status !== "all") {
+      if (status === "pending") {
+        query = {
+          ...query,
+          $or: [{ isActive: false }, { "user.isApproved": false }],
+        };
+      } else if (status === "active") {
+        query = {
+          ...query,
+          isActive: true,
+        };
+      } else if (status === "inactive") {
+        query = {
+          ...query,
+          isActive: false,
+        };
+      }
+    }
+
+    // Build base query using find() for better compatibility
+    let findQuery = {};
+
+    // Filter by status
+    if (status && status !== "all") {
+      if (status === "pending") {
+        // Pending clients: isActive false OR user not approved
+        findQuery.isActive = { $in: [true, false] }; // Get all, filter after populate
+      } else if (status === "active") {
+        findQuery.isActive = true;
+      } else if (status === "inactive") {
+        findQuery.isActive = false;
+      } else if (status === "suspended") {
+        // Suspended clients: user status is "suspended"
+        findQuery = { ...findQuery, "user.status": "suspended" };
+      } else if (status === "blocked") {
+        // Blocked clients: user status is "blocked"
+        findQuery = { ...findQuery, "user.status": "blocked" };
+      } else if (status === "rejected") {
+        // Rejected clients: user status is "rejected"
+        findQuery = { ...findQuery, "user.status": "rejected" };
+      }
+    }
+
+    // Fetch clients with population
+    let clients = await Client.find(findQuery)
+      .populate("user", "email fName lName phone status isApproved")
+      .populate("services.service", "name description basePrice")
+      .populate("currentPlan", "name price features billingCycle")
+      .lean();
+
+    // Apply pending filter after population
+    if (status === "pending" || pending === "true" || pending === true) {
+      clients = clients.filter((client) => {
+        const user = client.user;
+        return !client.isActive || (user && user.isApproved === false);
+      });
+    }
+
+    // Apply active filter more strictly if needed
+    if (status === "active") {
+      clients = clients.filter((client) => {
+        const user = client.user;
+        return client.isActive && (!user || user.isApproved !== false);
+      });
+    }
+
+    // Apply suspended filter
+    if (status === "suspended") {
+      clients = clients.filter((client) => {
+        const user = client.user;
+        return user && user.status === "suspended";
+      });
+    }
+
+    // Apply blocked filter
+    if (status === "blocked") {
+      clients = clients.filter((client) => {
+        const user = client.user;
+        return user && user.status === "blocked";
+      });
+    }
+
+    // Apply rejected filter
+    if (status === "rejected") {
+      clients = clients.filter((client) => {
+        const user = client.user;
+        return user && user.status === "rejected";
+      });
+    }
+
+    // Apply search filter
+    if (search) {
+      const searchLower = search.toLowerCase();
+      clients = clients.filter((client) => {
+        const user = client.user;
+        return (
+          client.companyName?.toLowerCase().includes(searchLower) ||
+          user?.email?.toLowerCase().includes(searchLower) ||
+          user?.fName?.toLowerCase().includes(searchLower) ||
+          user?.lName?.toLowerCase().includes(searchLower) ||
+          client.businessLocation?.city?.toLowerCase().includes(searchLower) ||
+          client.businessLocation?.state?.toLowerCase().includes(searchLower)
+        );
+      });
+    }
+
+    // Apply sorting
+    const sortField =
+      sortBy === "name"
+        ? "companyName"
+        : sortBy === "revenue"
+        ? "revenue"
+        : "createdAt";
+    const sortDirection = sortOrder === "asc" ? 1 : -1;
+    clients.sort((a, b) => {
+      let aValue = a[sortField];
+      let bValue = b[sortField];
+
+      if (sortField === "createdAt") {
+        aValue = new Date(aValue).getTime();
+        bValue = new Date(bValue).getTime();
+      } else if (sortField === "companyName") {
+        aValue = (aValue || "").toLowerCase();
+        bValue = (bValue || "").toLowerCase();
+      }
+
+      if (aValue < bValue) return -1 * sortDirection;
+      if (aValue > bValue) return 1 * sortDirection;
+      return 0;
+    });
+
+    // Calculate total count for pagination
+    const totalCount = clients.length;
+
+    // Apply pagination
+    const pageNum = parseInt(page);
+    const limitNum = parseInt(limit);
+    const startIndex = (pageNum - 1) * limitNum;
+    const endIndex = startIndex + limitNum;
+    const paginatedClients = clients.slice(startIndex, endIndex);
 
     res.status(200).json({
       status: "success",
-      results: clients.length,
+      results: paginatedClients.length,
+      total: totalCount,
+      page: pageNum,
+      limit: limitNum,
+      totalPages: Math.ceil(totalCount / limitNum),
       data: {
-        clients,
+        clients: paginatedClients,
       },
     });
   } catch (error) {
@@ -143,8 +386,11 @@ export const getAllClients = async (req, res, next) => {
 export const getClient = async (req, res, next) => {
   try {
     const client = await Client.findById(req.params.id)
-      .populate("user", "email fName lName phone status")
-      .populate("services", "name description")
+      .populate({
+        path: "user",
+        select: "email fName lName phone status +plainPassword",
+      })
+      .populate("services.service", "name description basePrice")
       .populate("currentPlan");
 
     if (!client) {
@@ -253,18 +499,39 @@ export const updateClient = async (req, res, next) => {
 // @route   DELETE /api/v1/clients/:id
 // @access  Private/Admin
 export const deleteClient = async (req, res, next) => {
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
   try {
-    const client = await Client.findByIdAndDelete(req.params.id);
+    const client = await Client.findById(req.params.id).session(session);
 
     if (!client) {
+      await session.abortTransaction();
+      session.endSession();
       return next(new AppError("No client found with that ID", 404));
     }
+
+    // Store the user ID before deleting the client
+    const userId = client.user;
+
+    // Delete the client
+    await Client.findByIdAndDelete(req.params.id).session(session);
+
+    // Delete the associated user
+    if (userId) {
+      await User.findByIdAndDelete(userId).session(session);
+    }
+
+    await session.commitTransaction();
+    session.endSession();
 
     res.status(204).json({
       status: "success",
       data: null,
     });
   } catch (error) {
+    await session.abortTransaction();
+    session.endSession();
     next(error);
   }
 };
@@ -286,10 +553,52 @@ export const getClientByUser = async (req, res, next) => {
       return next(new AppError("No client found for that user", 404));
     }
 
+    // Fetch subscriber data to get subscription details
+    const userId = client.user._id || client.user;
+    let subscription = null;
+
+    if (userId) {
+      const subscriber = await Subscriber.findOne({ user: userId }).populate(
+        "plan.plan",
+        "name price features billingCycle"
+      );
+
+      if (subscriber) {
+        // Auto-update status if expired
+        await subscriber.updatePlanStatus();
+
+        // Re-populate to ensure updated status is loaded
+        await subscriber.populate("plan.plan");
+
+        // Build subscription object for frontend
+        if (subscriber.plan && subscriber.plan.plan) {
+          subscription = {
+            _id: subscriber._id,
+            plan: {
+              _id: subscriber.plan.plan._id,
+              name: subscriber.plan.plan.name,
+              price: subscriber.plan.plan.price,
+              features: subscriber.plan.plan.features || [],
+            },
+            status: subscriber.plan.status,
+            billingCycle: subscriber.plan.billingCycle,
+            customPrice: subscriber.plan.customPrice,
+            discount: subscriber.plan.discount || 0,
+            startDate: subscriber.plan.startDate,
+            endDate: subscriber.plan.endDate,
+          };
+        }
+      }
+    }
+
+    // Merge subscription data into client object
+    const clientData = client.toObject();
+    clientData.subscription = subscription;
+
     res.status(200).json({
       status: "success",
       data: {
-        client,
+        client: clientData,
       },
     });
   } catch (error) {
@@ -336,36 +645,161 @@ export const toggleClientStatus = async (req, res, next) => {
 // @route   PATCH /api/v1/clients/:id/approve
 // @access  Private/Admin
 export const approveClient = async (req, res, next) => {
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
   try {
-    const client = await Client.findById(req.params.id).populate(
-      "user",
-      "email fName lName phone"
-    );
+    const client = await Client.findById(req.params.id)
+      .populate("user", "email fName lName phone isApproved status")
+      .session(session);
 
     if (!client) {
+      await session.abortTransaction();
+      session.endSession();
       return next(new AppError("No client found with that ID", 404));
     }
 
     // Approve the client (set isActive to true)
     client.isActive = true;
-    await client.save();
+    await client.save({ session });
 
     // Also approve the associated user if exists
-    if (client.user && client.user.isApproved === false) {
+    if (client.user) {
+      const userId = client.user._id || client.user;
       await User.findByIdAndUpdate(
-        client.user._id,
-        { isApproved: true },
-        { new: true }
+        userId,
+        {
+          isApproved: true,
+          status: "active",
+          isActive: true,
+        },
+        { new: true, session }
       );
     }
 
+    // Log the activity
+    const userId = client.user?._id || client.user;
+    if (userId) {
+      await ActivityLog.create(
+        [
+          {
+            user: userId, // The client user
+            actionType: "admin_action",
+            description: `Client ${client.companyName} approved by admin`,
+            performedBy: req.user.id, // The admin who performed the action
+            relatedModel: "Client",
+            relatedId: client._id,
+            metadata: {
+              clientName: client.companyName,
+              approvedBy: req.user.id,
+              action: "approve_client",
+            },
+          },
+        ],
+        { session }
+      );
+    }
+
+    await session.commitTransaction();
+    session.endSession();
+
+    // Re-populate for response
+    await client.populate("user", "email fName lName phone status isApproved");
+
     res.status(200).json({
       status: "success",
+      message: "Client approved successfully",
       data: {
         client,
       },
     });
   } catch (error) {
+    await session.abortTransaction();
+    session.endSession();
+    next(error);
+  }
+};
+
+// @desc    Reject client
+// @route   PATCH /api/v1/clients/:id/reject
+// @access  Private/Admin
+export const rejectClient = async (req, res, next) => {
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
+  try {
+    const { reason } = req.body;
+
+    const client = await Client.findById(req.params.id)
+      .populate("user", "email fName lName phone isApproved status")
+      .session(session);
+
+    if (!client) {
+      await session.abortTransaction();
+      session.endSession();
+      return next(new AppError("No client found with that ID", 404));
+    }
+
+    // Reject the client (set isActive to false)
+    client.isActive = false;
+    await client.save({ session });
+
+    // Also reject the associated user if exists
+    if (client.user) {
+      const userId = client.user._id || client.user;
+      await User.findByIdAndUpdate(
+        userId,
+        {
+          isApproved: false,
+          status: "inactive",
+          isActive: false,
+        },
+        { new: true, session }
+      );
+    }
+
+    // Log the activity
+    const userId = client.user?._id || client.user;
+    if (userId) {
+      await ActivityLog.create(
+        [
+          {
+            user: userId, // The client user
+            actionType: "admin_action",
+            description: `Client ${client.companyName} rejected by admin${
+              reason ? `: ${reason}` : ""
+            }`,
+            performedBy: req.user.id, // The admin who performed the action
+            relatedModel: "Client",
+            relatedId: client._id,
+            metadata: {
+              clientName: client.companyName,
+              rejectedBy: req.user.id,
+              reason: reason || "No reason provided",
+              action: "reject_client",
+            },
+          },
+        ],
+        { session }
+      );
+    }
+
+    await session.commitTransaction();
+    session.endSession();
+
+    // Re-populate for response
+    await client.populate("user", "email fName lName phone status isApproved");
+
+    res.status(200).json({
+      status: "success",
+      message: "Client rejected successfully",
+      data: {
+        client,
+      },
+    });
+  } catch (error) {
+    await session.abortTransaction();
+    session.endSession();
     next(error);
   }
 };
@@ -439,15 +873,19 @@ export const assignServiceToClient = async (req, res, next) => {
 
     const invoice = await Invoice.create({
       client: id,
-      amount: price,
-      status: "pending",
+      user: client.user || req.user.id,
+      subtotal: price,
+      tax: 0,
+      total: price,
+      status: "draft",
       issueDate: new Date(),
       dueDate: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), // 30 days due
       items: [
         {
           description: `Service Assignment: ${service.name}`,
-          quantity: 1,
-          price: price,
+          durationType: "one-time",
+          unitPrice: price,
+          taxRate: 0,
         },
       ],
       notes:
@@ -562,9 +1000,49 @@ export const getMyClientProfile = async (req, res, next) => {
       });
     }
 
+    // Fetch subscriber data to get subscription details
+    const userId = req.user.id;
+    let subscription = null;
+
+    const subscriber = await Subscriber.findOne({ user: userId }).populate(
+      "plan.plan",
+      "name price features billingCycle"
+    );
+
+    if (subscriber) {
+      // Auto-update status if expired
+      await subscriber.updatePlanStatus();
+
+      // Re-populate to ensure updated status is loaded
+      await subscriber.populate("plan.plan");
+
+      // Build subscription object for frontend
+      if (subscriber.plan && subscriber.plan.plan) {
+        subscription = {
+          _id: subscriber._id,
+          plan: {
+            _id: subscriber.plan.plan._id,
+            name: subscriber.plan.plan.name,
+            price: subscriber.plan.plan.price,
+            features: subscriber.plan.plan.features || [],
+          },
+          status: subscriber.plan.status,
+          billingCycle: subscriber.plan.billingCycle,
+          customPrice: subscriber.plan.customPrice,
+          discount: subscriber.plan.discount || 0,
+          startDate: subscriber.plan.startDate,
+          endDate: subscriber.plan.endDate,
+        };
+      }
+    }
+
+    // Merge subscription data into client object
+    const clientData = client.toObject();
+    clientData.subscription = subscription;
+
     res.status(200).json({
       status: "success",
-      data: client,
+      data: clientData,
     });
   } catch (error) {
     next(error);

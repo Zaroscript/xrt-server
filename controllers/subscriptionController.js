@@ -339,16 +339,26 @@ export const adminSubscribeClient = async (req, res, next) => {
     // Auto-generate invoice
     const amount = customPrice !== undefined ? customPrice : plan.price;
     
+    // Map billingCycle to durationType
+    let durationType = 'one-time';
+    if (billingCycle === 'monthly') durationType = 'monthly';
+    else if (billingCycle === 'quarterly') durationType = 'quarterly';
+    else if (billingCycle === 'annually' || billingCycle === 'yearly') durationType = 'annual';
+    
     const invoice = await Invoice.create({
       client: clientId,
-      amount,
-      status: 'pending',
+      user: client.user || req.user.id,
+      subtotal: amount,
+      tax: 0,
+      total: amount,
+      status: 'draft',
       issueDate: new Date(),
       dueDate: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), // 30 days due
       items: [{
         description: `Subscription to ${plan.name} (${billingCycle})`,
-        quantity: 1,
-        price: amount
+        durationType: durationType,
+        unitPrice: amount,
+        taxRate: 0
       }],
       notes: `Auto-generated invoice for subscription to ${plan.name}`
     });

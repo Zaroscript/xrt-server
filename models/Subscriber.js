@@ -17,7 +17,15 @@ const planSchema = new mongoose.Schema(
     },
     status: {
       type: String,
-      enum: ["pending_approval", "active", "expired", "cancelled", "rejected"],
+      enum: [
+        "pending_approval",
+        "active",
+        "expired",
+        "cancelled",
+        "rejected",
+        "suspended",
+        "pending",
+      ],
       default: "pending_approval",
     },
     approvalStatus: {
@@ -78,7 +86,15 @@ const subscriberSchema = new mongoose.Schema(
     },
     status: {
       type: String,
-      enum: ["active", "inactive", "suspended"],
+      enum: [
+        "active",
+        "inactive",
+        "suspended",
+        "cancelled",
+        "pending_approval",
+        "expired",
+        "rejected",
+      ],
       default: "active",
     },
     planHistory: [planSchema],
@@ -150,12 +166,16 @@ subscriberSchema.methods.updatePlanStatus = function () {
   if (this.plan) {
     const now = new Date();
     if (new Date(this.plan.endDate) < now) {
-      this.plan.status = "expired";
+      this.plan.status = "suspended";
+      this.status = "suspended";
+      this.isActive = false;
     } else if (
       this.plan.status === "pending" &&
       new Date(this.plan.startDate) <= now
     ) {
       this.plan.status = "active";
+      this.status = "active";
+      this.isActive = true;
     }
   }
   return this.save();
@@ -179,8 +199,14 @@ subscriberSchema.methods.renewPlan = async function (plan, paymentInfo = {}) {
 
   // Add current plan to history if it exists
   if (this.plan) {
+    const oldPlan = this.plan.toObject();
+    // Ensure old plan is not active in history
+    if (oldPlan.status === "active") {
+      oldPlan.status = "expired";
+    }
+
     this.planHistory.push({
-      ...this.plan.toObject(),
+      ...oldPlan,
       endDate: new Date(),
     });
   }

@@ -324,7 +324,7 @@ export const rejectRequest = async (req, res, next) => {
 // @access  Private/Admin
 export const updateRequest = async (req, res, next) => {
   try {
-    const { notes, adminNotes } = req.body;
+    const { notes, adminNotes, requestedItemId } = req.body;
 
     const request = await Request.findById(req.params.id);
 
@@ -332,13 +332,55 @@ export const updateRequest = async (req, res, next) => {
       return next(new AppError("Request not found", 404));
     }
 
-    if (notes) request.notes = notes;
-    if (adminNotes) request.adminNotes = adminNotes;
+    // Only allow editing pending requests
+    if (request.status !== "pending") {
+      return next(new AppError("Only pending requests can be edited", 400));
+    }
+
+    // Update notes
+    if (notes !== undefined) request.notes = notes;
+    if (adminNotes !== undefined) request.adminNotes = adminNotes;
+
+    // Update requested item if provided
+    if (requestedItemId) {
+      // Verify the requested item exists and matches the request type
+      let requestedItem;
+      if (request.type === "service") {
+        requestedItem = await Service.findById(requestedItemId);
+        if (!requestedItem) {
+          return next(new AppError("Service not found", 404));
+        }
+        request.itemModel = "Service";
+      } else if (request.type === "plan_change") {
+        requestedItem = await Plan.findById(requestedItemId);
+        if (!requestedItem) {
+          return next(new AppError("Plan not found", 404));
+        }
+        request.itemModel = "Plan";
+      } else {
+        return next(new AppError("Invalid request type", 400));
+      }
+
+      request.requestedItem = requestedItemId;
+    }
 
     await request.save();
 
+    // Populate for response
+    await request.populate([
+      {
+        path: "client",
+        select: "companyName user",
+        populate: { path: "user", select: "email fName lName phone" },
+      },
+      { path: "user", select: "email fName lName phone" },
+      { path: "requestedItem" },
+      { path: "processedBy", select: "fName lName email" },
+    ]);
+
     res.status(200).json({
       status: "success",
+      message: "Request updated successfully",
       data: request,
     });
   } catch (error) {

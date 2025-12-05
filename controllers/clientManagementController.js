@@ -40,10 +40,41 @@ export const getClientFullDetails = async (req, res, next) => {
       return next(new AppError("Client not found", 404));
     }
 
-    // Get subscription details
-    const subscription = await Subscription.findOne({ client: id })
-      .populate("plan")
-      .sort({ createdAt: -1 });
+    // Get subscription details from Subscriber model (User-centric)
+    const subscriber = await Subscriber.findOne({
+      user: client.user._id,
+    }).populate("plan.plan");
+
+    if (subscriber) {
+      console.log(
+        "DEBUG: Before updatePlanStatus - Status:",
+        subscriber.plan.status
+      );
+      console.log(
+        "DEBUG: Before updatePlanStatus - EndDate:",
+        subscriber.plan.endDate
+      );
+      await subscriber.updatePlanStatus();
+      await subscriber.populate("plan.plan");
+      console.log(
+        "DEBUG: After updatePlanStatus - Status:",
+        subscriber.plan.status
+      );
+    }
+
+    let subscription = null;
+    if (subscriber && subscriber.plan) {
+      subscription = {
+        _id: subscriber._id,
+        plan: subscriber.plan.plan,
+        status: subscriber.plan.status,
+        billingCycle: subscriber.plan.billingCycle,
+        customPrice: subscriber.plan.customPrice,
+        discount: subscriber.plan.discount,
+        startDate: subscriber.plan.startDate,
+        expiresAt: subscriber.plan.endDate,
+      };
+    }
 
     // Get activity logs (last 20)
     const activityLogs = await ActivityLog.getUserLogs(client.user._id, {
@@ -123,8 +154,19 @@ export const assignSubscriptionToClient = async (req, res, next) => {
       discount = 0,
       billingCycle,
       startDate,
+      endDate: providedEndDate,
       generateInvoice = true,
+      customFeatures,
     } = req.body;
+
+    console.log(
+      "DEBUG: assignSubscriptionToClient - req.body:",
+      JSON.stringify(req.body, null, 2)
+    );
+    console.log(
+      "DEBUG: assignSubscriptionToClient - providedEndDate:",
+      providedEndDate
+    );
 
     // Validate inputs
     if (!planId || !billingCycle) {
@@ -148,18 +190,23 @@ export const assignSubscriptionToClient = async (req, res, next) => {
 
     // Calculate dates
     const subStartDate = startDate ? new Date(startDate) : new Date();
-    let endDate = new Date(subStartDate);
+    let endDate;
 
-    switch (billingCycle) {
-      case "monthly":
-        endDate.setMonth(endDate.getMonth() + 1);
-        break;
-      case "quarterly":
-        endDate.setMonth(endDate.getMonth() + 3);
-        break;
-      case "annually":
-        endDate.setFullYear(endDate.getFullYear() + 1);
-        break;
+    if (providedEndDate) {
+      endDate = new Date(providedEndDate);
+    } else {
+      endDate = new Date(subStartDate);
+      switch (billingCycle) {
+        case "monthly":
+          endDate.setMonth(endDate.getMonth() + 1);
+          break;
+        case "quarterly":
+          endDate.setMonth(endDate.getMonth() + 3);
+          break;
+        case "annually":
+          endDate.setFullYear(endDate.getFullYear() + 1);
+          break;
+      }
     }
 
     // Find or create subscriber
@@ -177,34 +224,57 @@ export const assignSubscriptionToClient = async (req, res, next) => {
 
     let subscriber = await Subscriber.findOne({ user: userId });
 
+    // Use custom features if provided, otherwise use plan features
+    const features =
+      customFeatures &&
+      Array.isArray(customFeatures) &&
+      customFeatures.length > 0
+        ? customFeatures
+        : plan.features || [];
+
+    // Determine status based on dates
+    const now = new Date();
+    let status = "active";
+    if (endDate < now) {
+      status = "suspended";
+    } else if (subStartDate > now) {
+      status = "pending";
+    }
+
     if (subscriber) {
       // Update existing subscriber plan
       subscriber.plan = {
         plan: planId,
-        status: "active",
+        status: status,
         startDate: subStartDate,
         endDate: endDate,
         billingCycle,
         price: finalPrice,
-        features: plan.features || [],
+        features: features,
         customPrice: customPrice || null,
         discount: discount || 0,
       };
+
+      // Sync top-level status
+      subscriber.status = status;
+      subscriber.isActive = status === "active";
     } else {
       // Create new subscriber
       subscriber = new Subscriber({
         user: userId,
         plan: {
           plan: planId,
-          status: "active",
+          status: status,
           startDate: subStartDate,
           endDate: endDate,
           billingCycle,
           price: finalPrice,
-          features: plan.features || [],
+          features: features,
           customPrice: customPrice || null,
           discount: discount || 0,
         },
+        status: status,
+        isActive: status === "active",
       });
     }
 
@@ -217,6 +287,13 @@ export const assignSubscriptionToClient = async (req, res, next) => {
     // Generate invoice if requested
     let invoice = null;
     if (generateInvoice) {
+      // Map billingCycle to durationType
+      let durationType = "one-time";
+      if (billingCycle === "monthly") durationType = "monthly";
+      else if (billingCycle === "quarterly") durationType = "quarterly";
+      else if (billingCycle === "annually" || billingCycle === "yearly")
+        durationType = "annual";
+
       invoice = await Invoice.create({
         client: id,
         user: userId,
@@ -228,7 +305,7 @@ export const assignSubscriptionToClient = async (req, res, next) => {
         items: [
           {
             description: `${plan.name} - ${billingCycle} subscription`,
-            quantity: 1,
+            durationType: durationType,
             unitPrice: finalPrice,
             taxRate: 0,
           },
@@ -312,10 +389,9 @@ export const renewClientSubscription = async (req, res, next) => {
       return next(new AppError("No active subscription found", 404));
     }
 
-    // Calculate new end date based on current end date or now
+    // Calculate new end date based on current end date (always extend from existing end date)
     const currentEndDate = new Date(subscriber.plan.endDate);
-    const now = new Date();
-    const baseDate = currentEndDate > now ? currentEndDate : now;
+    const baseDate = currentEndDate;
 
     const newEndDate = new Date(baseDate);
     newEndDate.setMonth(newEndDate.getMonth() + months);
@@ -339,6 +415,14 @@ export const renewClientSubscription = async (req, res, next) => {
 
     console.log("Pricing calculated - Total:", totalAmount);
 
+    // Determine durationType based on billing cycle
+    const billingCycle = subscriber.plan.billingCycle || "monthly";
+    let durationType = "one-time";
+    if (billingCycle === "monthly") durationType = "monthly";
+    else if (billingCycle === "quarterly") durationType = "quarterly";
+    else if (billingCycle === "annually" || billingCycle === "yearly")
+      durationType = "annual";
+
     // Generate renewal invoice
     const invoice = await Invoice.create({
       client: id,
@@ -353,7 +437,7 @@ export const renewClientSubscription = async (req, res, next) => {
           description: `${plan.name} - Renewal (${months} month${
             months > 1 ? "s" : ""
           })`,
-          quantity: months,
+          durationType: durationType,
           unitPrice: finalPrice,
           taxRate: 0,
         },
@@ -488,6 +572,10 @@ export const cancelClientSubscription = async (req, res, next) => {
  */
 export const assignServiceToClient = async (req, res, next) => {
   try {
+    console.log("=== ASSIGN SERVICE TO CLIENT DEBUG ===");
+    console.log("Client ID:", req.params.id);
+    console.log("Request body:", JSON.stringify(req.body, null, 2));
+
     const { id } = req.params;
     const {
       serviceId,
@@ -501,6 +589,7 @@ export const assignServiceToClient = async (req, res, next) => {
     } = req.body;
 
     if (!serviceId || customPrice === undefined) {
+      console.log("Validation error: Missing serviceId or customPrice");
       return next(
         new AppError("Service ID and custom price are required", 400)
       );
@@ -508,23 +597,20 @@ export const assignServiceToClient = async (req, res, next) => {
 
     const client = await Client.findById(id);
     if (!client) {
+      console.log("Client not found:", id);
       return next(new AppError("Client not found", 404));
     }
+    console.log("Client found:", client._id);
 
     const service = await Service.findById(serviceId);
     if (!service) {
+      console.log("Service not found:", serviceId);
       return next(new AppError("Service not found", 404));
     }
+    console.log("Service found:", service.name);
 
-    // Check if service already assigned
-    const existingService = client.services.find(
-      (s) => s.service.toString() === serviceId
-    );
-    if (existingService) {
-      return next(new AppError("Service already assigned to this client", 400));
-    }
-
-    // Add service to client
+    // Add service to client (allow multiple instances of same service)
+    console.log("Adding service to client...");
     client.services.push({
       service: serviceId,
       customPrice,
@@ -537,25 +623,32 @@ export const assignServiceToClient = async (req, res, next) => {
     });
 
     await client.save();
+    console.log("Client saved successfully");
 
     // Generate invoice
     const discountAmount = (customPrice * discount) / 100;
     const finalPrice = customPrice - discountAmount;
+    console.log("Generating invoice - Final price:", finalPrice);
 
     const invoice = await Invoice.create({
       client: id,
-      amount: finalPrice,
-      originalAmount: service.price || customPrice,
-      discount: discountAmount,
-      status: "pending",
+      user: client.user,
+      subtotal: finalPrice,
+      tax: 0,
+      total: finalPrice,
+      status: "draft",
       dueDate: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
       items: [
         {
           description: `${service.name} - Service Assignment`,
-          amount: finalPrice,
+          durationType: "one-time",
+          unitPrice: finalPrice,
+          taxRate: 0,
         },
       ],
+      notes: notes || `Service assignment: ${service.name}`,
     });
+    console.log("Invoice created:", invoice._id);
 
     // Log activity
     await ActivityLog.createLog({
@@ -567,7 +660,9 @@ export const assignServiceToClient = async (req, res, next) => {
       relatedModel: "Service",
       relatedId: serviceId,
     });
+    console.log("Activity logged");
 
+    console.log("=== ASSIGN SERVICE SUCCESS ===");
     res.status(201).json({
       status: "success",
       data: {
@@ -576,6 +671,9 @@ export const assignServiceToClient = async (req, res, next) => {
       },
     });
   } catch (error) {
+    console.error("=== ASSIGN SERVICE ERROR ===");
+    console.error("Error:", error.message);
+    console.error("Stack:", error.stack);
     next(error);
   }
 };
@@ -589,17 +687,22 @@ export const updateClientService = async (req, res, next) => {
     const { id, serviceId } = req.params;
     const { customPrice, discount, notes, status } = req.body;
 
-    const client = await Client.findById(id);
+    const client = await Client.findById(id).populate("services.service");
     if (!client) {
       return next(new AppError("Client not found", 404));
     }
 
     const serviceIndex = client.services.findIndex(
-      (s) => s.service.toString() === serviceId
+      (s) => s.service._id.toString() === serviceId
     );
     if (serviceIndex === -1) {
       return next(new AppError("Service not found for this client", 404));
     }
+
+    // Store old price to check if it changed
+    const oldPrice = client.services[serviceIndex].customPrice;
+    const oldDiscount = client.services[serviceIndex].discount || 0;
+    const priceChanged = customPrice !== undefined && customPrice !== oldPrice;
 
     // Update service details
     if (customPrice !== undefined)
@@ -611,13 +714,41 @@ export const updateClientService = async (req, res, next) => {
 
     await client.save();
 
+    // Generate invoice if price changed
+    let invoice = null;
+    if (priceChanged) {
+      const service = client.services[serviceIndex].service;
+      const finalDiscount = discount !== undefined ? discount : oldDiscount;
+      const discountAmount = (customPrice * finalDiscount) / 100;
+      const finalPrice = customPrice - discountAmount;
+
+      invoice = await Invoice.create({
+        client: id,
+        user: client.user,
+        subtotal: finalPrice,
+        tax: 0,
+        total: finalPrice,
+        status: "draft",
+        dueDate: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+        items: [
+          {
+            description: `${service.name} - Service Update (Price Change)`,
+            durationType: "one-time",
+            unitPrice: finalPrice,
+            taxRate: 0,
+          },
+        ],
+        notes: notes || `Service price updated: ${service.name}`,
+      });
+    }
+
     // Log activity
     await ActivityLog.createLog({
       user: client.user,
       actionType: "service_updated",
-      description: `Service updated`,
+      description: `Service updated${priceChanged ? " with price change" : ""}`,
       performedBy: req.user._id,
-      metadata: { serviceId, customPrice, discount, status },
+      metadata: { serviceId, customPrice, discount, status, priceChanged },
       relatedModel: "Service",
       relatedId: serviceId,
     });
@@ -626,6 +757,7 @@ export const updateClientService = async (req, res, next) => {
       status: "success",
       data: {
         client: await client.populate("services.service"),
+        invoice: invoice || undefined,
       },
     });
   } catch (error) {

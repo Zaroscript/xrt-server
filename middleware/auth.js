@@ -1,4 +1,5 @@
 import User from "../models/User.js";
+import Client from "../models/Client.js";
 import jwt from "jsonwebtoken";
 import { UnauthorizedError, ForbiddenError } from "../utils/errors.js";
 
@@ -57,7 +58,7 @@ export const protect = async (req, res, next) => {
     }
 
     const user = await User.findById(decoded.id).select(
-      "+isActive +isApproved +passwordChangedAt"
+      "+isActive +isApproved +passwordChangedAt +status"
     );
     if (!user) {
       clearAccessTokenCookie(res);
@@ -69,7 +70,8 @@ export const protect = async (req, res, next) => {
       return next(new ForbiddenError("Your account has been deactivated."));
     }
 
-    if (!user.isApproved) {
+    // Check if user is pending approval
+    if (user.status === "pending" || !user.isApproved) {
       return next(new ForbiddenError("Your account is pending approval."));
     }
 
@@ -104,9 +106,48 @@ export const handleTokenExpiration = (err, req, res, next) => {
 
 export const restrictTo = (...roles) => {
   return (req, res, next) => {
-    if (!roles.includes(req.user.role)) {
-      return next(new ForbiddenError("You are not authorized."));
+    if (!req.user) {
+      return next(new ForbiddenError("User not found in request."));
+    }
+    
+    const userRole = req.user.role;
+    if (!userRole) {
+      console.error("User role is missing:", { userId: req.user._id, user: req.user });
+      return next(new ForbiddenError("User role is not set. Please contact support."));
+    }
+    
+    if (!roles.includes(userRole)) {
+      console.error("Authorization failed:", {
+        userRole,
+        allowedRoles: roles,
+        userId: req.user._id,
+        email: req.user.email,
+        isApproved: req.user.isApproved,
+        isActive: req.user.isActive
+      });
+      return next(
+        new ForbiddenError(
+          `You are not authorized. Required role: ${roles.join(" or ")}, Your role: ${userRole}`
+        )
+      );
     }
     next();
   };
+};
+
+// Middleware to check if user has a client profile
+export const requireClientProfile = async (req, res, next) => {
+  try {
+    const client = await Client.findOne({ user: req.user.id });
+    
+    if (!client) {
+      return next(new ForbiddenError("Client profile not found. Please contact support to set up your client profile."));
+    }
+    
+    req.client = client;
+    next();
+  } catch (error) {
+    console.error("Error checking client profile:", error);
+    next(new ForbiddenError("Error verifying client profile."));
+  }
 };

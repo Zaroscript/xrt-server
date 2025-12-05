@@ -34,8 +34,18 @@ export const register = async (req, res, next) => {
       companyName,
       oldWebsite: oldWebsite || "",
       role: "client",
-      isApproved: false,
+      isApproved: false, // New registrations require admin approval
+      isActive: false, // User is inactive until approved
+      status: "pending", // User status is pending until admin approval
       plainPassword: password, // Save plain password for admin view
+    });
+
+    // Create Client profile for the new user (inactive until approved)
+    await Client.create({
+      user: user._id,
+      companyName: companyName,
+      oldWebsite: oldWebsite || "",
+      isActive: false, // Client is inactive until admin approves
     });
 
     const accessToken = generateAccessToken(user);
@@ -45,9 +55,12 @@ export const register = async (req, res, next) => {
 
     res.status(201).json({
       status: "success",
-      message: "Registration successful. Awaiting admin approval.",
+      message: "Registration successful. Your account is pending admin approval. You will be notified once your account is approved.",
       data: {
-        user,
+        user: {
+          ...user.toObject(),
+          isApproved: false, // Explicitly show approval status
+        },
         accessToken,
         refreshToken,
       },
@@ -88,7 +101,8 @@ export const login = async (req, res, next) => {
       );
     }
 
-    if (!user.isApproved) {
+    // Check if user is pending approval
+    if (user.status === "pending" || !user.isApproved) {
       return next(
         new AppError(
           "Your account is currently pending approval. You will be notified once an admin reviews your registration.",

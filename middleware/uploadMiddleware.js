@@ -7,21 +7,37 @@ import { AppError } from '../utils/errors.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// Ensure uploads directory exists
-const uploadsDir = path.join(__dirname, '..', 'uploads', 'avatars');
-if (!fs.existsSync(uploadsDir)) {
-  fs.mkdirSync(uploadsDir, { recursive: true });
+// Ensure uploads directories exist
+const avatarsDir = path.join(__dirname, '..', 'uploads', 'avatars');
+const logosDir = path.join(__dirname, '..', 'uploads', 'logos');
+if (!fs.existsSync(avatarsDir)) {
+  fs.mkdirSync(avatarsDir, { recursive: true });
+}
+if (!fs.existsSync(logosDir)) {
+  fs.mkdirSync(logosDir, { recursive: true });
 }
 
-// Configure storage
-const storage = multer.diskStorage({
+// Configure storage for avatars
+const avatarStorage = multer.diskStorage({
   destination: (req, file, cb) => {
-    cb(null, uploadsDir);
+    cb(null, avatarsDir);
   },
   filename: (req, file, cb) => {
-    const userId = req.params.id || req.user.id;
+    const userId = req.params.id || req.user?.id;
     const ext = path.extname(file.originalname);
     const filename = `user-${userId}-${Date.now()}${ext}`;
+    cb(null, filename);
+  }
+});
+
+// Configure storage for logos
+const logoStorage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    cb(null, logosDir);
+  },
+  filename: (req, file, cb) => {
+    const ext = path.extname(file.originalname);
+    const filename = `company-logo-${Date.now()}${ext}`;
     cb(null, filename);
   }
 });
@@ -39,9 +55,17 @@ const fileFilter = (req, file, cb) => {
   }
 };
 
-// Create multer upload instance
+// Create multer upload instances
 export const uploadAvatar = multer({
-  storage: storage,
+  storage: avatarStorage,
+  limits: {
+    fileSize: 5 * 1024 * 1024 // 5MB limit
+  },
+  fileFilter: fileFilter
+});
+
+export const uploadLogo = multer({
+  storage: logoStorage,
   limits: {
     fileSize: 5 * 1024 * 1024 // 5MB limit
   },

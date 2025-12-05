@@ -29,10 +29,11 @@ const invoiceSchema = new mongoose.Schema({
       type: String,
       required: true,
     },
-    quantity: {
-      type: Number,
+    durationType: {
+      type: String,
+      enum: ['one-time', 'monthly', 'quarterly', 'annual'],
       required: true,
-      default: 1,
+      default: 'one-time',
     },
     unitPrice: {
       type: Number,
@@ -86,12 +87,13 @@ invoiceSchema.pre('save', async function(next) {
 
 // Calculate totals before saving
 invoiceSchema.pre('save', function(next) {
+  // For calculations, we use quantity = 1 (durationType is for display only)
   this.subtotal = this.items.reduce((sum, item) => {
-    return sum + (item.quantity * item.unitPrice);
+    return sum + (1 * item.unitPrice);
   }, 0);
   
   this.tax = this.items.reduce((sum, item) => {
-    return sum + (item.quantity * item.unitPrice * (item.taxRate / 100));
+    return sum + (1 * item.unitPrice * (item.taxRate / 100));
   }, 0);
   
   this.total = this.subtotal + this.tax;

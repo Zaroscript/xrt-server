@@ -11,7 +11,29 @@ export const getAllSubscribers = async (req, res, next) => {
   try {
     const subscribers = await Subscriber.find({})
       .populate("user", "email fName lName phone avatar")
-      .populate("plan.plan", "name price billingCycle");
+      .populate("plan.plan", "name price billingCycle")
+      .populate("planHistory.plan", "name price billingCycle");
+
+    // Update status for all fetched subscribers
+    try {
+      await Promise.all(
+        subscribers.map(async (sub) => {
+          try {
+            if (sub.updatePlanStatus) {
+              await sub.updatePlanStatus();
+            }
+          } catch (err) {
+            console.error(
+              `Error updating plan status for subscriber ${sub._id}:`,
+              err.message
+            );
+            // Continue with other subscribers even if one fails
+          }
+        })
+      );
+    } catch (error) {
+      console.error("Error in auto-suspension loop:", error);
+    }
 
     res.status(200).json({
       status: "success",
@@ -28,10 +50,9 @@ export const getAllSubscribers = async (req, res, next) => {
 // @access  Private/Subscriber
 export const getMySubscriberProfile = async (req, res, next) => {
   try {
-    const subscriber = await Subscriber.findOne({ user: req.user.id }).populate(
-      "plan.plan",
-      "name price billingCycle features"
-    );
+    const subscriber = await Subscriber.findOne({ user: req.user.id })
+      .populate("plan.plan", "name price billingCycle features")
+      .populate("planHistory.plan", "name price billingCycle features");
 
     if (!subscriber) {
       return next(new AppError("Subscriber profile not found", 404));
@@ -53,7 +74,12 @@ export const getSubscriber = async (req, res, next) => {
   try {
     const subscriber = await Subscriber.findById(req.params.id)
       .populate("user", "email fullName")
-      .populate("plan.plan", "name price billingCycle");
+      .populate("plan.plan", "name price billingCycle")
+      .populate("planHistory.plan", "name price billingCycle");
+
+    if (subscriber) {
+      await subscriber.updatePlanStatus();
+    }
 
     if (!subscriber) {
       return next(new AppError("No subscriber found with that ID", 404));
@@ -224,16 +250,10 @@ export const autoSyncClientsToSubscribers = async () => {
 // @access  Private/Admin
 export const syncClientsToSubscribers = async (req, res, next) => {
   try {
-    console.log(
-      "Starting sync of clients with current plans to subscribers..."
-    );
-
     // Find all clients that have a currentPlan
     const clientsWithPlans = await Client.find({
       currentPlan: { $exists: true, $ne: null },
     }).populate("user currentPlan");
-
-    console.log(`Found ${clientsWithPlans.length} clients with current plans`);
 
     let syncedCount = 0;
     let skippedCount = 0;
@@ -243,11 +263,6 @@ export const syncClientsToSubscribers = async (req, res, next) => {
       try {
         // Skip if client has no user or plan data
         if (!client.user || !client.currentPlan) {
-          console.log(
-            `Skipping client ${
-              client.companyName || "unknown"
-            } - missing user or plan data`
-          );
           skippedCount++;
           continue;
         }
@@ -258,9 +273,6 @@ export const syncClientsToSubscribers = async (req, res, next) => {
         });
 
         if (existingSubscriber) {
-          console.log(
-            `Subscriber already exists for user ${client.user.email}, skipping...`
-          );
           skippedCount++;
           continue;
         }
@@ -269,9 +281,6 @@ export const syncClientsToSubscribers = async (req, res, next) => {
         if (client.user.role !== "subscriber") {
           client.user.role = "subscriber";
           await client.user.save({ validateBeforeSave: false });
-          console.log(
-            `Updated user role to subscriber for ${client.user.email}`
-          );
         }
 
         // Create new subscriber record
@@ -299,27 +308,17 @@ export const syncClientsToSubscribers = async (req, res, next) => {
           status: "active",
         };
 
-        const subscriber = await Subscriber.create(subscriberData);
-        console.log(
-          `Created subscriber for user ${client.user.email} with plan ${client.currentPlan.name}`
-        );
+        await Subscriber.create(subscriberData);
         syncedCount++;
       } catch (error) {
-        console.error(
-          `Error processing client ${client.companyName} (user: ${client.user.email}):`,
-          error
-        );
+        console.error(`Error processing client ${client.companyName}:`, error);
         errors.push({
           client: client.companyName,
-          user: client.user.email,
+          user: client.user?.email || "unknown",
           error: error.message,
         });
       }
     }
-
-    console.log(
-      `Sync completed: ${syncedCount} created, ${skippedCount} skipped, ${errors.length} errors`
-    );
 
     res.status(200).json({
       status: "success",
@@ -391,8 +390,17 @@ export const createSubscriber = async (req, res, next) => {
     if (subscriber) {
       // Archive current plan if exists
       if (subscriber.plan) {
+        const oldPlan = subscriber.plan.toObject();
+        // Ensure old plan is not active in history
+        if (
+          oldPlan.status === "active" ||
+          oldPlan.status === "pending_approval"
+        ) {
+          oldPlan.status = "expired";
+        }
+
         subscriber.planHistory.push({
-          ...subscriber.plan.toObject(),
+          ...oldPlan,
           endDate: new Date(),
         });
       }
@@ -600,10 +608,25 @@ export const updateSubscriber = async (req, res, next) => {
 
     // Update plan if provided
     if (plan) {
-      // Add current plan to history if it exists and is being updated
-      if (subscriber.plan && (plan.plan || plan.status || plan.endDate)) {
+      // Add current plan to history ONLY if the plan ID is changing (switching plans)
+      if (
+        subscriber.plan &&
+        plan.plan &&
+        subscriber.plan.plan.toString() !== plan.plan.toString()
+      ) {
+        const currentPlan = subscriber.plan.toObject();
+        delete currentPlan._id; // Allow Mongoose to generate a new ID for the history item
+
+        // Ensure old plan is not active in history
+        if (
+          currentPlan.status === "active" ||
+          currentPlan.status === "pending_approval"
+        ) {
+          currentPlan.status = "expired";
+        }
+
         subscriber.planHistory.push({
-          ...subscriber.plan.toObject(),
+          ...currentPlan,
           endDate: new Date(),
         });
       }
@@ -658,6 +681,7 @@ export const updateSubscriber = async (req, res, next) => {
     await subscriber.populate([
       { path: "user", select: "email fName lName phone avatar" },
       { path: "plan.plan", select: "name price billingCycle features" },
+      { path: "planHistory.plan", select: "name price billingCycle features" },
     ]);
 
     res.status(200).json({
@@ -818,12 +842,20 @@ export const getSubscriberStats = async (req, res, next) => {
       status: "active",
     }).populate("plan.plan");
     const monthlyRecurringRevenue = activeSubscriptions.reduce((total, sub) => {
-      if (sub.plan && sub.plan.plan) {
-        const price = sub.plan.plan.price || 0;
-        // Convert yearly to monthly
-        const monthlyPrice =
-          sub.plan.billingCycle === "yearly" ? price / 12 : price;
-        return total + monthlyPrice;
+      if (sub.plan) {
+        let price = sub.plan.customPrice || sub.plan.price || 0;
+
+        // Normalize to monthly price
+        if (
+          sub.plan.billingCycle === "annually" ||
+          sub.plan.billingCycle === "yearly"
+        ) {
+          price = price / 12;
+        } else if (sub.plan.billingCycle === "quarterly") {
+          price = price / 3;
+        }
+
+        return total + price;
       }
       return total;
     }, 0);
@@ -899,12 +931,20 @@ export const getSubscriberGrowth = async (req, res, next) => {
       }).populate("plan.plan");
 
       const revenueInMonth = activeSubscriptionsInMonth.reduce((total, sub) => {
-        if (sub.plan && sub.plan.plan) {
-          const price = sub.plan.plan.price || 0;
-          // Convert yearly to monthly
-          const monthlyPrice =
-            sub.plan.billingCycle === "yearly" ? price / 12 : price;
-          return total + monthlyPrice;
+        if (sub.plan) {
+          let price = sub.plan.customPrice || sub.plan.price || 0;
+
+          // Normalize to monthly price
+          if (
+            sub.plan.billingCycle === "annually" ||
+            sub.plan.billingCycle === "yearly"
+          ) {
+            price = price / 12;
+          } else if (sub.plan.billingCycle === "quarterly") {
+            price = price / 3;
+          }
+
+          return total + price;
         }
         return total;
       }, 0);
@@ -962,6 +1002,38 @@ export const getPlanDistribution = async (req, res, next) => {
     res.status(200).json({
       status: "success",
       data: formattedData,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// @desc    Clear plan history
+// @route   DELETE /api/v1/subscribers/:id/history
+// @access  Private/Admin
+export const clearPlanHistory = async (req, res, next) => {
+  try {
+    const subscriber = await Subscriber.findById(req.params.id);
+    if (!subscriber) {
+      return next(new AppError("No subscriber found with that ID", 404));
+    }
+
+    subscriber.planHistory = [];
+    await subscriber.save();
+
+    // Populate to return consistent data structure
+    await subscriber.populate([
+      { path: "user", select: "email fName lName phone avatar" },
+      { path: "plan.plan", select: "name price billingCycle features" },
+      { path: "planHistory.plan", select: "name price billingCycle features" },
+    ]);
+
+    res.status(200).json({
+      status: "success",
+      message: "Plan history cleared successfully",
+      data: {
+        subscriber,
+      },
     });
   } catch (error) {
     next(error);

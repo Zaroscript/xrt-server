@@ -16,6 +16,7 @@ import subscriptionRoutes from "./routes/subscriptionRoutes.js";
 import invoiceRoutes from "./routes/invoiceRoutes.js";
 import contactRoutes from "./routes/contactRoutes.js";
 import requestRoutes from "./routes/requestRoutes.js";
+import companySettingsRoutes from "./routes/companySettingsRoutes.js";
 import errorHandler from "./middleware/errorHandler.js";
 
 // Load environment variables
@@ -128,7 +129,7 @@ app.use(
   })
 );
 
-// Serve static files (uploaded avatars)
+// Serve static files (uploaded avatars and logos)
 app.use("/uploads", express.static("uploads"));
 
 // Rate limiting (temporarily disabled for testing)
@@ -175,6 +176,7 @@ app.use("/api/v1/plan-management", subscriptionRoutes);
 app.use("/api/v1/invoices", invoiceRoutes);
 app.use("/api/v1/contact", contactRoutes);
 app.use("/api/v1/requests", requestRoutes);
+app.use("/api/v1", companySettingsRoutes);
 
 // ========================
 // ERROR HANDLING
@@ -184,7 +186,7 @@ app.use(errorHandler);
 // ========================
 // START SERVER
 // ========================
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 5000;
 
 // Scheduled jobs
 const startScheduledJobs = () => {

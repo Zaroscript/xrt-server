@@ -1,5 +1,5 @@
-import express from 'express';
-import { protect, restrictTo } from '../middleware/auth.js';
+import express from "express";
+import { protect, restrictTo } from "../middleware/auth.js";
 import {
   getAllSubscribers,
   getSubscriber,
@@ -17,7 +17,8 @@ import {
   getSubscriberStats,
   getSubscriberGrowth,
   getPlanDistribution,
-} from '../controllers/subscriberController.js';
+  clearPlanHistory,
+} from "../controllers/subscriberController.js";
 
 const router = express.Router();
 
@@ -25,37 +26,43 @@ const router = express.Router();
 router.use(protect);
 
 // Subscriber routes
-router.get('/me', getMySubscriberProfile);
-router.get('/me/history', getMyPlanHistory);
-router.patch('/me/preferences', updateMyPreferences);
+router.get("/me", getMySubscriberProfile);
+router.get("/me/history", getMyPlanHistory);
+router.patch("/me/preferences", updateMyPreferences);
 
 // Admin routes
-router.use(restrictTo('super_admin', 'moderator'));
+router.use(restrictTo("super_admin", "moderator"));
 
 // Sync clients with current plans to subscribers
-router.post('/sync', syncClientsToSubscribers);
+router.post("/sync", syncClientsToSubscribers);
 
 // Subscriber statistics and analytics
-router.get('/stats', getSubscriberStats);
-router.get('/growth', getSubscriberGrowth);
-router.get('/plan-distribution', getPlanDistribution);
+router.get("/stats", getSubscriberStats);
+router.get("/growth", getSubscriberGrowth);
+router.get("/plan-distribution", getPlanDistribution);
 
 // Subscription management routes - Only super admins can approve/reject
-router.post('/:subscriberId/approve', restrictTo('super_admin'), approveSubscription);
-router.post('/:subscriberId/reject', restrictTo('super_admin'), rejectSubscription);
-router.post('/:subscriberId/payments', recordPayment);
+router.post(
+  "/:subscriberId/approve",
+  restrictTo("super_admin"),
+  approveSubscription
+);
+router.post(
+  "/:subscriberId/reject",
+  restrictTo("super_admin"),
+  rejectSubscription
+);
+router.post("/:subscriberId/payments", recordPayment);
+router.delete("/:id/history", clearPlanHistory);
+
+router.route("/").get(getAllSubscribers).post(createSubscriber);
 
 router
-  .route('/')
-  .get(getAllSubscribers)
-  .post(createSubscriber);
-
-router
-  .route('/:id')
+  .route("/:id")
   .get(getSubscriber)
   .patch(updateSubscriber)
   .delete(deleteSubscriber);
 
-router.patch('/:id/toggle-status', toggleSubscriberStatus);
+router.patch("/:id/toggle-status", toggleSubscriberStatus);
 
 export default router;

@@ -8,6 +8,7 @@ import {
   getClientByUser,
   toggleClientStatus,
   approveClient,
+  rejectClient,
   getClientActivities,
   assignServiceToClient,
   removeServiceFromClient,
@@ -15,8 +16,13 @@ import {
   updateMyClientProfile,
   requestSubscriptionChange,
   requestNewService,
+  getClientStats,
 } from "../controllers/clientController.js";
-import { protect, restrictTo } from "../middleware/auth.js";
+import {
+  protect,
+  restrictTo,
+  requireClientProfile,
+} from "../middleware/auth.js";
 
 const router = express.Router();
 
@@ -25,19 +31,16 @@ router.use(protect);
 
 // Client self-service routes (before admin middleware)
 router.get("/me", getMyClientProfile);
-router.patch("/me", restrictTo("client", "subscriber"), updateMyClientProfile);
+router.patch("/me", requireClientProfile, updateMyClientProfile);
 router.post(
   "/subscription-change-request",
-  restrictTo("client", "subscriber"),
+  requireClientProfile,
   requestSubscriptionChange
 );
-router.post(
-  "/service-request",
-  restrictTo("client", "subscriber"),
-  requestNewService
-);
+router.post("/service-request", requireClientProfile, requestNewService);
 
 // Regular authenticated user routes (no admin restriction)
+router.get("/stats", restrictTo("super_admin", "moderator"), getClientStats);
 router.route("/:id").get(getClient);
 
 // Admin only routes - allow super_admin and moderator
@@ -49,6 +52,7 @@ router.route("/:id").patch(updateClient).delete(deleteClient);
 router.route("/:id/toggle-status").patch(toggleClientStatus);
 
 router.route("/:id/approve").patch(approveClient);
+router.route("/:id/reject").patch(rejectClient);
 
 // Client access to their own data
 router.get("/user/me", getClientByUser);

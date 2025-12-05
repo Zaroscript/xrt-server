@@ -47,6 +47,13 @@ import {
   validateUpdatePlan,
   validatePlanId,
 } from "../middleware/validation/planValidation.js";
+import {
+  getCompanySettings,
+  updateCompanySettings,
+  uploadCompanyLogo,
+  deleteCompanyLogo,
+} from "../controllers/companySettingsController.js";
+import { uploadLogo } from "../middleware/uploadMiddleware.js";
 
 const router = express.Router();
 
@@ -207,5 +214,17 @@ router.post(
   restrictTo("super_admin", "moderator"),
   resetClientPassword
 );
+
+// Company Settings
+router
+  .route("/company-settings")
+  .get(getCompanySettings)
+  .put(restrictTo("super_admin"), updateCompanySettings);
+
+// Company Logo
+router
+  .route("/company-settings/logo")
+  .post(restrictTo("super_admin"), uploadLogo.single("logo"), uploadCompanyLogo)
+  .delete(restrictTo("super_admin"), deleteCompanyLogo);
 
 export default router;

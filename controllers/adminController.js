@@ -8,6 +8,7 @@ import Subscriber from "../models/Subscriber.js";
 import { AppError } from "../utils/errors.js";
 import { sendRejectionEmail } from "../utils/emailService.js";
 import { startOfMonth, endOfMonth, subMonths, format } from "date-fns";
+import Request from "../models/Request.js";
 import mongoose from "mongoose";
 
 // === Dashboard Data ===
@@ -179,6 +180,8 @@ export const approveUser = async (req, res, next) => {
       req.params.id,
       {
         isApproved: true,
+        status: "active", // Change status from pending to active
+        isActive: true, // Activate the user
         role: "client", // Ensure the role is set to client
       },
       { new: true, session }
@@ -371,10 +374,53 @@ export const deleteUserPermanently = async (req, res, next) => {
 // === Service Requests ===
 export const getPendingServiceRequests = async (req, res, next) => {
   try {
-    const requests = await ServiceRequest.find({ status: "pending" })
+    // 1. Fetch from legacy ServiceRequest model
+    const legacyRequests = await ServiceRequest.find({ status: "pending" })
       .populate("client", "email fName lName fullName companyName phone")
       .populate("service", "name");
-    res.json({ status: "success", data: { requests } });
+
+    // 2. Fetch from new generic Request model
+    const newRequests = await Request.find({
+      status: "pending",
+      type: "service",
+    })
+      .populate("client", "email fName lName fullName companyName phone")
+      .populate("requestedItem", "name"); // populate the actual item
+
+    // Map new requests to match the structure if needed, or just combine
+    // The frontend expects `service` field to be populated.
+    // The generic request has `requestedItem`. We can map it.
+    const mappedNewRequests = newRequests.map((req) => {
+      const regexObj = req.toObject();
+      regexObj.service = regexObj.requestedItem; // Map requestedItem to service
+      return regexObj;
+    });
+
+    const allRequests = [...legacyRequests, ...mappedNewRequests];
+
+    // Sort by createdAt desc
+    allRequests.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+
+    // Deduplicate by client ID AND service ID
+    const uniqueRequests = [];
+    const seenRequestKeys = new Set();
+
+    for (const req of allRequests) {
+      const clientId = req.client?._id?.toString() || req.client?.toString();
+      const serviceId = req.service?._id?.toString() || req.service?.toString();
+
+      const key = `${clientId}-${serviceId}`;
+
+      if (clientId && serviceId && !seenRequestKeys.has(key)) {
+        seenRequestKeys.add(key);
+        uniqueRequests.push(req);
+      } else if (!serviceId) {
+        // If no service ID (shouldn't happen), just push it
+        uniqueRequests.push(req);
+      }
+    }
+
+    res.json({ status: "success", data: { requests: uniqueRequests } });
   } catch (err) {
     next(err);
   }
@@ -404,10 +450,44 @@ export const respondToServiceRequest = async (req, res, next) => {
 // === Plan Requests ===
 export const getPendingPlanRequests = async (req, res, next) => {
   try {
-    const requests = await PlanRequest.find({ status: "pending" })
+    // 1. Fetch from legacy PlanRequest model
+    const legacyRequests = await PlanRequest.find({ status: "pending" })
       .populate("client", "email fName lName fullName companyName phone")
       .populate("plan", "name price");
-    res.json({ status: "success", data: { requests } });
+
+    // 2. Fetch from new generic Request model
+    const newRequests = await Request.find({
+      status: "pending",
+      type: "plan_change",
+    })
+      .populate("client", "email fName lName fullName companyName phone")
+      .populate("requestedItem", "name price"); // populate the actual item
+
+    // Map new requests
+    const mappedNewRequests = newRequests.map((req) => {
+      const regexObj = req.toObject();
+      regexObj.plan = regexObj.requestedItem; // Map requestedItem to plan
+      return regexObj;
+    });
+
+    const allRequests = [...legacyRequests, ...mappedNewRequests];
+
+    // Sort by createdAt desc
+    allRequests.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+
+    // Deduplicate by client ID (allow only one pending plan request per client)
+    const uniqueRequests = [];
+    const seenClientIds = new Set();
+
+    for (const req of allRequests) {
+      const clientId = req.client?._id?.toString() || req.client?.toString();
+      if (clientId && !seenClientIds.has(clientId)) {
+        seenClientIds.add(clientId);
+        uniqueRequests.push(req);
+      }
+    }
+
+    res.json({ status: "success", data: { requests: uniqueRequests } });
   } catch (err) {
     next(err);
   }
