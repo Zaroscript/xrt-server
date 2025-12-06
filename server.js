@@ -52,8 +52,10 @@ app.use((req, res, next) => {
   next();
 });
 
+// Enable CORS with specific origins and credentials
+// Parse allowed origins from environment variable
 const corsOriginsFromEnv = process.env.CORS_ALLOWED_ORIGINS
-  ? process.env.CORS_ALLOWED_ORIGINS.split(",").map(origin => origin.trim())
+  ? process.env.CORS_ALLOWED_ORIGINS.split(",").map((origin) => origin.trim())
   : [];
 
 const allowedOrigins = [
@@ -62,15 +64,21 @@ const allowedOrigins = [
   process.env.USER_FRONTEND_URL,
 ].filter(Boolean);
 
+// CORS configuration
 const corsOptions = {
   origin: function (origin, callback) {
-    if (process.env.NODE_ENV === "development") return callback(null, true);
+    // In development, allow all origins
+    if (process.env.NODE_ENV === "development") {
+      return callback(null, true);
+    }
 
+    // In production, only allow specific origins
     if (allowedOrigins.indexOf(origin) !== -1 || !origin) {
       return callback(null, true);
     }
 
-    return callback(new Error(`CORS blocked: ${origin}`), false);
+    const msg = `The CORS policy for this site does not allow access from ${origin}`;
+    return callback(new Error(msg), false);
   },
   credentials: true,
   methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
@@ -81,13 +89,28 @@ const corsOptions = {
     "Accept",
     "Origin",
   ],
-  exposedHeaders: ["Set-Cookie", "Authorization", "Content-Range", "X-Content-Range"],
-  maxAge: 86400,
+  exposedHeaders: [
+    "Set-Cookie",
+    "Authorization",
+    "Content-Range",
+    "X-Content-Range",
+  ],
+  maxAge: 86400, // 24 hours
+  preflightContinue: false,
   optionsSuccessStatus: 204,
 };
 
-app.use(cors(corsOptions));
+// Handle preflight requests
 app.options("*", cors(corsOptions));
+
+// Apply CORS to all routes
+app.use(
+  cors({
+    origin: allowedOrigins,
+    credentials: true,
+    ...corsOptions,
+  })
+);
 
 // Body parser middleware with increased limit
 app.use(express.json({ limit: "10mb" }));
