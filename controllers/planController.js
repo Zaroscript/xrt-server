@@ -1,7 +1,7 @@
-import Plan from '../models/Plan.js';
-import PlanRequest from '../models/PlanRequest.js';
-import { AppError } from '../utils/errors.js';
-import { validationResult } from 'express-validator';
+import Plan from "../models/Plan.js";
+import PlanRequest from "../models/PlanRequest.js";
+import { AppError } from "../utils/errors.js";
+import { validationResult } from "express-validator";
 
 // @desc    Get all plans
 // @route   GET /api/v1/plans
@@ -10,25 +10,25 @@ export const getAllPlans = async (req, res, next) => {
   try {
     const { active, featured } = req.query;
     const query = { isActive: true };
-    
-    if (active) query.isActive = active === 'true';
-    if (featured) query.isFeatured = featured === 'true';
-    
-    const plans = await Plan.find(query).sort({ price: 1 });
+
+    if (active) query.isActive = active === "true";
+    if (featured) query.isFeatured = featured === "true";
+
+    const plans = await Plan.find(query).sort({ displayOrder: 1, price: 1 });
 
     // Include virtual fields in the response
-    const plansWithVirtuals = plans.map(plan => ({
+    const plansWithVirtuals = plans.map((plan) => ({
       ...plan.toObject(),
       discountedPrice: plan.discountedPrice,
       discountedMonthlyPrice: plan.discountedMonthlyPrice,
       discountedYearlyPrice: plan.discountedYearlyPrice,
-      isDiscountActive: plan.isDiscountActive()
+      isDiscountActive: plan.isDiscountActive(),
     }));
 
     res.status(200).json({
-      status: 'success',
+      status: "success",
       results: plansWithVirtuals.length,
-      data: { plans: plansWithVirtuals }
+      data: { plans: plansWithVirtuals },
     });
   } catch (error) {
     next(error);
@@ -41,14 +41,14 @@ export const getAllPlans = async (req, res, next) => {
 export const getPlan = async (req, res, next) => {
   try {
     const plan = await Plan.findById(req.params.id);
-    
+
     if (!plan) {
-      return next(new AppError('No plan found with that ID', 404));
+      return next(new AppError("No plan found with that ID", 404));
     }
-    
+
     res.status(200).json({
-      status: 'success',
-      data: { plan }
+      status: "success",
+      data: { plan },
     });
   } catch (error) {
     next(error);
@@ -61,10 +61,10 @@ export const getPlan = async (req, res, next) => {
 export const createPlan = async (req, res, next) => {
   try {
     const plan = await Plan.create(req.body);
-    
+
     res.status(201).json({
-      status: 'success',
-      data: { plan }
+      status: "success",
+      data: { plan },
     });
   } catch (error) {
     next(error);
@@ -89,34 +89,30 @@ export const updatePlan = async (req, res, next) => {
       // Get the updated plan
       const plan = await Plan.findById(req.params.id);
       if (!plan) {
-        return next(new AppError('No plan found with that ID', 404));
+        return next(new AppError("No plan found with that ID", 404));
       }
       return res.status(200).json({
-        status: 'success',
+        status: "success",
         data: {
-          plan
-        }
+          plan,
+        },
       });
     }
 
-    const plan = await Plan.findByIdAndUpdate(
-      req.params.id,
-      updateData,
-      {
-        new: true,
-        runValidators: true
-      }
-    );
-    
+    const plan = await Plan.findByIdAndUpdate(req.params.id, updateData, {
+      new: true,
+      runValidators: true,
+    });
+
     if (!plan) {
-      return next(new AppError('No plan found with that ID', 404));
+      return next(new AppError("No plan found with that ID", 404));
     }
-    
+
     res.status(200).json({
-      status: 'success',
+      status: "success",
       data: {
-        plan
-      }
+        plan,
+      },
     });
   } catch (err) {
     next(err);
@@ -129,14 +125,14 @@ export const updatePlan = async (req, res, next) => {
 export const deletePlan = async (req, res, next) => {
   try {
     const plan = await Plan.findByIdAndDelete(req.params.id);
-    
+
     if (!plan) {
-      return next(new AppError('No plan found with that ID', 404));
+      return next(new AppError("No plan found with that ID", 404));
     }
-    
+
     res.status(204).json({
-      status: 'success',
-      data: null
+      status: "success",
+      data: null,
     });
   } catch (error) {
     next(error);
@@ -149,17 +145,17 @@ export const deletePlan = async (req, res, next) => {
 export const togglePlanStatus = async (req, res, next) => {
   try {
     const plan = await Plan.findById(req.params.id);
-    
+
     if (!plan) {
-      return next(new AppError('No plan found with that ID', 404));
+      return next(new AppError("No plan found with that ID", 404));
     }
-    
+
     plan.isActive = !plan.isActive;
     await plan.save({ validateBeforeSave: false });
-    
+
     res.status(200).json({
-      status: 'success',
-      data: { plan }
+      status: "success",
+      data: { plan },
     });
   } catch (error) {
     next(error);
@@ -172,13 +168,13 @@ export const togglePlanStatus = async (req, res, next) => {
 export const getFeaturedPlans = async (req, res, next) => {
   try {
     const plans = await Plan.find({ isFeatured: true, isActive: true })
-      .sort({ price: 1 })
+      .sort({ displayOrder: 1, price: 1 })
       .limit(3);
-    
+
     res.status(200).json({
-      status: 'success',
+      status: "success",
       results: plans.length,
-      data: { plans }
+      data: { plans },
     });
   } catch (error) {
     next(error);
@@ -195,7 +191,7 @@ export const requestPlan = async (req, res, next) => {
 
   try {
     const plan = await Plan.findById(planId);
-    if (!plan) return next(new AppError('Plan not found', 404));
+    if (!plan) return next(new AppError("Plan not found", 404));
 
     const requestData = {
       client: clientId,
@@ -209,7 +205,7 @@ export const requestPlan = async (req, res, next) => {
 
     const request = await PlanRequest.create(requestData);
 
-    res.status(201).json({ status: 'success', data: { request } });
+    res.status(201).json({ status: "success", data: { request } });
   } catch (err) {
     next(err);
   }
@@ -226,21 +222,21 @@ export const addOrUpdateDiscount = async (req, res, next) => {
     }
 
     const { amount, isActive, startDate, endDate, code } = req.body;
-    
+
     const plan = await Plan.findById(req.params.id);
     if (!plan) {
-      return next(new AppError('No plan found with that ID', 404));
+      return next(new AppError("No plan found with that ID", 404));
     }
 
     // Check if discount code is already in use
     if (code) {
       const existingPlan = await Plan.findOne({
         _id: { $ne: plan._id },
-        'discount.code': code
+        "discount.code": code,
       });
-      
+
       if (existingPlan) {
-        return next(new AppError('Discount code is already in use', 400));
+        return next(new AppError("Discount code is already in use", 400));
       }
     }
 
@@ -250,16 +246,16 @@ export const addOrUpdateDiscount = async (req, res, next) => {
       isActive: isActive !== undefined ? isActive : true,
       startDate: startDate ? new Date(startDate) : null,
       endDate: endDate ? new Date(endDate) : null,
-      code: code || null
+      code: code || null,
     };
 
     await plan.save();
 
     res.status(200).json({
-      status: 'success',
+      status: "success",
       data: {
-        plan
-      }
+        plan,
+      },
     });
   } catch (error) {
     next(error);
@@ -273,7 +269,7 @@ export const removeDiscount = async (req, res, next) => {
   try {
     const plan = await Plan.findById(req.params.id);
     if (!plan) {
-      return next(new AppError('No plan found with that ID', 404));
+      return next(new AppError("No plan found with that ID", 404));
     }
 
     // Reset discount
@@ -282,16 +278,16 @@ export const removeDiscount = async (req, res, next) => {
       isActive: false,
       startDate: null,
       endDate: null,
-      code: null
+      code: null,
     };
 
     await plan.save();
 
     res.status(200).json({
-      status: 'success',
+      status: "success",
       data: {
-        plan
-      }
+        plan,
+      },
     });
   } catch (error) {
     next(error);
@@ -304,26 +300,26 @@ export const removeDiscount = async (req, res, next) => {
 export const getActiveDiscounts = async (req, res, next) => {
   try {
     const now = new Date();
-    
+
     const plans = await Plan.find({
-      'discount.isActive': true,
-      'discount.amount': { $gt: 0 },
+      "discount.isActive": true,
+      "discount.amount": { $gt: 0 },
       $or: [
-        { 'discount.startDate': { $lte: now } },
-        { 'discount.startDate': { $exists: false } }
+        { "discount.startDate": { $lte: now } },
+        { "discount.startDate": { $exists: false } },
       ],
       $or: [
-        { 'discount.endDate': { $gte: now } },
-        { 'discount.endDate': { $exists: false } }
-      ]
-    }).select('name price discount');
+        { "discount.endDate": { $gte: now } },
+        { "discount.endDate": { $exists: false } },
+      ],
+    }).select("name price discount");
 
     res.status(200).json({
-      status: 'success',
+      status: "success",
       results: plans.length,
       data: {
-        plans
-      }
+        plans,
+      },
     });
   } catch (error) {
     next(error);

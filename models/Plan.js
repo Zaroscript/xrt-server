@@ -46,6 +46,14 @@ const planSchema = new mongoose.Schema(
       type: Boolean,
       default: true,
     },
+    displayOrder: {
+      type: Number,
+      default: 0,
+    },
+    isCustom: {
+      type: Boolean,
+      default: false,
+    },
     badge: {
       text: {
         type: String,
