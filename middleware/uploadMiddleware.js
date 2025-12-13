@@ -1,15 +1,15 @@
-import multer from 'multer';
-import path from 'path';
-import { fileURLToPath } from 'url';
-import fs from 'fs';
-import { AppError } from '../utils/errors.js';
+import multer from "multer";
+import path from "path";
+import { fileURLToPath } from "url";
+import fs from "fs";
+import { AppError } from "../utils/errors.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 // Ensure uploads directories exist
-const avatarsDir = path.join(__dirname, '..', 'uploads', 'avatars');
-const logosDir = path.join(__dirname, '..', 'uploads', 'logos');
+const avatarsDir = path.join(__dirname, "..", "uploads", "avatars");
+const logosDir = path.join(__dirname, "..", "uploads", "logos");
 if (!fs.existsSync(avatarsDir)) {
   fs.mkdirSync(avatarsDir, { recursive: true });
 }
@@ -27,7 +27,7 @@ const avatarStorage = multer.diskStorage({
     const ext = path.extname(file.originalname);
     const filename = `user-${userId}-${Date.now()}${ext}`;
     cb(null, filename);
-  }
+  },
 });
 
 // Configure storage for logos
@@ -39,19 +39,29 @@ const logoStorage = multer.diskStorage({
     const ext = path.extname(file.originalname);
     const filename = `company-logo-${Date.now()}${ext}`;
     cb(null, filename);
-  }
+  },
 });
 
 // File filter
 const fileFilter = (req, file, cb) => {
+  console.log(
+    "Multer fileFilter called. File:",
+    file.originalname,
+    "Mimetype:",
+    file.mimetype
+  );
   const allowedTypes = /jpeg|jpg|png|gif/;
-  const extname = allowedTypes.test(path.extname(file.originalname).toLowerCase());
+  const extname = allowedTypes.test(
+    path.extname(file.originalname).toLowerCase()
+  );
   const mimetype = allowedTypes.test(file.mimetype);
 
   if (extname && mimetype) {
     return cb(null, true);
   } else {
-    cb(new AppError('Only image files (jpeg, jpg, png, gif) are allowed!', 400));
+    cb(
+      new AppError("Only image files (jpeg, jpg, png, gif) are allowed!", 400)
+    );
   }
 };
 
@@ -59,15 +69,15 @@ const fileFilter = (req, file, cb) => {
 export const uploadAvatar = multer({
   storage: avatarStorage,
   limits: {
-    fileSize: 5 * 1024 * 1024 // 5MB limit
+    fileSize: 5 * 1024 * 1024, // 5MB limit
   },
-  fileFilter: fileFilter
+  fileFilter: fileFilter,
 });
 
 export const uploadLogo = multer({
   storage: logoStorage,
   limits: {
-    fileSize: 5 * 1024 * 1024 // 5MB limit
+    fileSize: 5 * 1024 * 1024, // 5MB limit
   },
-  fileFilter: fileFilter
+  fileFilter: fileFilter,
 });
